@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -47,11 +51,241 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 		newVersionCommand(),
 		newConfigCommand(),
 		newTokenCommand(),
+		newUpstreamCommand(stdin),
 		newServeCommand(),
 		newCompletionCommand(root),
 	)
 
 	return root
+}
+
+func newUpstreamCommand(stdin io.Reader) *cobra.Command {
+	upstreamCmd := &cobra.Command{
+		Use:   "upstream",
+		Short: "Manage upstream provider configuration",
+	}
+
+	upstreamCmd.AddCommand(
+		newUpstreamShowCommand(),
+		newUpstreamSetURLCommand(),
+		newUpstreamSetKeyCommand(stdin),
+		newUpstreamTestCommand(),
+	)
+
+	return upstreamCmd
+}
+
+func newUpstreamShowCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show",
+		Short: "Show upstream configuration",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprint(cmd.OutOrStdout(), config.FormatRedacted(cfg))
+			return err
+		},
+	}
+}
+
+func newUpstreamSetURLCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-url <base-url>",
+		Short: "Set upstream base URL",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseURL, err := normalizeBaseURL(args[0])
+			if err != nil {
+				return err
+			}
+			cfg, paths, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			cfg.Upstream.BaseURL = baseURL
+			if err := config.Save(paths.ConfigFile, cfg); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "upstream base_url: %s\n", baseURL)
+			return err
+		},
+	}
+}
+
+func newUpstreamSetKeyCommand(stdin io.Reader) *cobra.Command {
+	var envName string
+	var readStdin bool
+	var prompt bool
+
+	setKeyCmd := &cobra.Command{
+		Use:   "set-key",
+		Short: "Set upstream API key source",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			selected := 0
+			if envName != "" {
+				selected++
+			}
+			if readStdin {
+				selected++
+			}
+			if prompt {
+				selected++
+			}
+			if selected != 1 {
+				return fmt.Errorf("exactly one of --env, --stdin, or --prompt is required")
+			}
+
+			cfg, paths, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			switch {
+			case envName != "":
+				cfg.Upstream.APIKeySource = "env"
+				cfg.Upstream.APIKeyEnv = envName
+				cfg.Upstream.APIKey = ""
+			case readStdin:
+				key, err := readKeyFromStdin(stdin)
+				if err != nil {
+					return err
+				}
+				cfg.Upstream.APIKeySource = "inline"
+				cfg.Upstream.APIKeyEnv = ""
+				cfg.Upstream.APIKey = key
+			case prompt:
+				if _, err := fmt.Fprint(cmd.ErrOrStderr(), "API key: "); err != nil {
+					return err
+				}
+				key, err := readKeyLine(stdin)
+				if err != nil {
+					return err
+				}
+				cfg.Upstream.APIKeySource = "inline"
+				cfg.Upstream.APIKeyEnv = ""
+				cfg.Upstream.APIKey = key
+			}
+			if err := config.Save(paths.ConfigFile, cfg); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "upstream API key updated")
+			return err
+		},
+	}
+	setKeyCmd.Flags().StringVar(&envName, "env", "", "environment variable containing upstream API key")
+	setKeyCmd.Flags().BoolVar(&readStdin, "stdin", false, "read upstream API key from stdin")
+	setKeyCmd.Flags().BoolVar(&prompt, "prompt", false, "prompt for upstream API key")
+
+	return setKeyCmd
+}
+
+func newUpstreamTestCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "test",
+		Short: "Test upstream connectivity",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if cfg.Upstream.BaseURL == "" {
+				return fmt.Errorf("upstream base_url is not configured")
+			}
+			key, err := resolveUpstreamKey(cfg)
+			if err != nil {
+				return err
+			}
+			req, err := http.NewRequest(http.MethodGet, cfg.Upstream.BaseURL, nil)
+			if err != nil {
+				return err
+			}
+			if key != "" {
+				req.Header.Set("Authorization", "Bearer "+key)
+			}
+			client := http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "upstream: %s\nstatus: %d\n", cfg.Upstream.BaseURL, resp.StatusCode)
+			return err
+		},
+	}
+}
+
+func loadConfig() (config.Config, config.Paths, error) {
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		return config.Config{}, config.Paths{}, err
+	}
+	cfg, err := config.Load(paths.ConfigFile)
+	if err != nil {
+		return config.Config{}, config.Paths{}, err
+	}
+	return cfg, paths, nil
+}
+
+func normalizeBaseURL(value string) (string, error) {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("base URL must use http or https")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("base URL must include host")
+	}
+	return strings.TrimRight(value, "/"), nil
+}
+
+func readKeyFromStdin(stdin io.Reader) (string, error) {
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", err
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return "", fmt.Errorf("API key is empty")
+	}
+	return key, nil
+}
+
+func readKeyLine(stdin io.Reader) (string, error) {
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	key := strings.TrimSpace(line)
+	if key == "" {
+		return "", fmt.Errorf("API key is empty")
+	}
+	return key, nil
+}
+
+func resolveUpstreamKey(cfg config.Config) (string, error) {
+	switch cfg.Upstream.APIKeySource {
+	case "":
+		return "", nil
+	case "inline":
+		return cfg.Upstream.APIKey, nil
+	case "env":
+		if cfg.Upstream.APIKeyEnv == "" {
+			return "", fmt.Errorf("upstream API key env name is empty")
+		}
+		value := os.Getenv(cfg.Upstream.APIKeyEnv)
+		if value == "" {
+			return "", fmt.Errorf("upstream API key env %s is not set", cfg.Upstream.APIKeyEnv)
+		}
+		return value, nil
+	default:
+		return "", fmt.Errorf("unknown upstream API key source: %s", cfg.Upstream.APIKeySource)
+	}
 }
 
 func newTokenCommand() *cobra.Command {

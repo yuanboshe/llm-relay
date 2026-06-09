@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -233,5 +235,107 @@ func TestRunTokenLifecycle(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "no tokens") {
 		t.Fatalf("list output = %q, want no tokens", stdout.String())
+	}
+}
+
+func TestRunUpstreamSetURLAndShow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	for _, args := range [][]string{
+		{"init"},
+		{"upstream", "set-url", "https://api.example.test/v1/"},
+		{"upstream", "show"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, `base_url = "https://api.example.test/v1"`) {
+		t.Fatalf("upstream show = %q, want normalized base URL", out)
+	}
+}
+
+func TestRunUpstreamSetKeyStdinRedactsShow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	keyValue := strings.Join([]string{"runtime", "key", "value"}, "-")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run([]string{"init"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(init) returned error: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := RunWithIO([]string{"upstream", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(upstream set-key --stdin) returned error: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"upstream", "show"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(upstream show) returned error: %v", err)
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, keyValue) {
+		t.Fatalf("upstream show leaked key: %q", out)
+	}
+	if !strings.Contains(out, "<redacted>") {
+		t.Fatalf("upstream show = %q, want redacted key", out)
+	}
+}
+
+func TestRunUpstreamTestUsesKeyWithoutPrintingIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	keyValue := strings.Join([]string{"runtime", "test", "key"}, "-")
+	var seenAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	commands := [][]string{
+		{"init"},
+		{"upstream", "set-url", server.URL},
+	}
+	for _, args := range commands {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := RunWithIO([]string{"upstream", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(upstream set-key --stdin) returned error: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"upstream", "test"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(upstream test) returned error: %v", err)
+	}
+
+	if seenAuth != "Bearer "+keyValue {
+		t.Fatalf("Authorization = %q, want bearer key", seenAuth)
+	}
+	out := stdout.String()
+	if strings.Contains(out, keyValue) {
+		t.Fatalf("upstream test leaked key: %q", out)
+	}
+	if !strings.Contains(out, "status: 200") {
+		t.Fatalf("upstream test output = %q, want status", out)
 	}
 }
