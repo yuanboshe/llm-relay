@@ -96,7 +96,13 @@ func (s *RelayServer) Handler() http.Handler {
 			return
 		}
 
-		clientToken := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if !strings.HasPrefix(auth, "Bearer ") {
+			status = http.StatusUnauthorized
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		clientToken := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 		if clientToken == "" || !strings.HasPrefix(clientToken, "llmr_") || !HasToken(s.cfg, clientToken) {
 			status = http.StatusUnauthorized
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -193,7 +199,10 @@ func WaitForServer(addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	url := "http://" + addr + "/v1/models"
 	for time.Now().Before(deadline) {
-		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
 		req.Header.Set("Authorization", "******")
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil {

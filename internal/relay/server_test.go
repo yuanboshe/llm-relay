@@ -30,7 +30,10 @@ func TestRelayReplacesAuthorizationHeader(t *testing.T) {
 	relay := httptest.NewServer(srv.Handler())
 	defer relay.Close()
 
-	req, _ := http.NewRequest(http.MethodPost, relay.URL+"/v1/chat/completions", nil)
+	req, err := http.NewRequest(http.MethodPost, relay.URL+"/v1/chat/completions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("Authorization", "Bearer "+plain)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -59,7 +62,10 @@ func TestRelayRejectsInvalidToken(t *testing.T) {
 	relay := httptest.NewServer(srv.Handler())
 	defer relay.Close()
 
-	req, _ := http.NewRequest(http.MethodPost, relay.URL+"/v1/chat/completions", nil)
+	req, err := http.NewRequest(http.MethodPost, relay.URL+"/v1/chat/completions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("Authorization", "invalid")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
