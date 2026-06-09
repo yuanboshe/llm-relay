@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/yuanboshe/llm-relay/internal/config"
 	"github.com/yuanboshe/llm-relay/internal/relay"
 	"github.com/yuanboshe/llm-relay/internal/tokenstore"
+	"github.com/yuanboshe/llm-relay/internal/tunnel"
 )
 
 const version = "dev"
@@ -762,8 +764,30 @@ func newServeCommand() *cobra.Command {
 				Config: cfg,
 				Tokens: records,
 			})
+			serveCtx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			tunnelErr := make(chan error, 1)
+			if cfg.Tunnel.Enabled {
+				process, err := tunnel.Start(serveCtx, cfg, cmd.ErrOrStderr())
+				if err != nil {
+					return fmt.Errorf("start ssh tunnel: %w", err)
+				}
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "ssh reverse tunnel enabled: %s:%s\n", cfg.Tunnel.RemoteHost, cfg.Tunnel.RemotePort)
+				go func() {
+					if err := <-process.Done(); err != nil {
+						tunnelErr <- err
+						cancel()
+					}
+				}()
+			}
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "llmrelay serving on %s\n", server.Addr())
-			return server.ListenAndServe(cmd.Context())
+			err = server.ListenAndServe(serveCtx)
+			select {
+			case tunnelExitErr := <-tunnelErr:
+				return fmt.Errorf("ssh tunnel exited: %w", tunnelExitErr)
+			default:
+			}
+			return err
 		},
 	}
 	serveCmd.Flags().StringVar(&addr, "addr", "", "override HTTP listen address")

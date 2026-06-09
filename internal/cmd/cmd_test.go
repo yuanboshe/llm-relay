@@ -513,6 +513,44 @@ func TestRunConfigValidateSucceedsForInlineKeyWithoutPrintingIt(t *testing.T) {
 	}
 }
 
+func TestRunConfigValidateChecksTunnelRequiredFields(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	keyValue := strings.Join([]string{"local", "tunnel", "value"}, "-")
+	configText := fmt.Sprintf(`listen_addr = "127.0.0.1:18080"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+api_key_source = "inline"
+api_key_env = ""
+api_key = "%s"
+
+[tunnel]
+enabled = true
+ssh_host = ""
+ssh_user = "ubuntu"
+ssh_port = "22"
+remote_host = "127.0.0.1"
+remote_port = "18080"
+`, keyValue)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := Run([]string{"config", "validate"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(config validate) returned nil error, want tunnel error")
+	}
+	if !strings.Contains(err.Error(), "tunnel ssh_host is empty") {
+		t.Fatalf("error = %q, want tunnel ssh_host error", err.Error())
+	}
+	if strings.Contains(stdout.String()+stderr.String()+err.Error(), keyValue) {
+		t.Fatalf("config validate leaked key")
+	}
+}
+
 func TestRunDoctorReportsUninitializedHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
