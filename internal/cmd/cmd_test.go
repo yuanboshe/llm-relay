@@ -46,20 +46,18 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestRunServeDryOutput(t *testing.T) {
+func TestRunServeRequiresConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if err := Run([]string{"serve", "--addr", "127.0.0.1:9090"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(serve) returned error: %v", err)
+	err := Run([]string{"serve"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(serve) returned nil error, want missing config error")
 	}
-
-	out := stdout.String()
-	if !strings.Contains(out, "127.0.0.1:9090") {
-		t.Fatalf("serve output = %q, want address", out)
-	}
-	if !strings.Contains(out, "/v1/chat/completions") {
-		t.Fatalf("serve output = %q, want OpenAI route", out)
+	if !strings.Contains(err.Error(), "run llmrelay init") {
+		t.Fatalf("error = %q, want init hint", err.Error())
 	}
 }
 

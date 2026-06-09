@@ -737,15 +737,36 @@ func newServeCommand() *cobra.Command {
 
 	serveCmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Placeholder for the future HTTP relay server",
+		Short: "Start the HTTP relay server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			server := relay.NewServer(addr)
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "llmrelay server would listen on %s with routes %v\n", server.Addr(), server.Routes())
-			return err
+			cfg, paths, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if addr != "" {
+				cfg.ListenAddr = addr
+			}
+			key, err := resolveUpstreamKey(cfg)
+			if err != nil {
+				return err
+			}
+			cfg.Upstream.APIKey = key
+			store := tokenstore.New(paths.TokenFile)
+			records, err := store.Load()
+			if err != nil {
+				return err
+			}
+			server := relay.NewProxyServer(relay.Options{
+				Addr:   cfg.ListenAddr,
+				Config: cfg,
+				Tokens: records,
+			})
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "llmrelay serving on %s\n", server.Addr())
+			return server.ListenAndServe(cmd.Context())
 		},
 	}
-	serveCmd.Flags().StringVar(&addr, "addr", "127.0.0.1:18080", "HTTP listen address")
+	serveCmd.Flags().StringVar(&addr, "addr", "", "override HTTP listen address")
 
 	return serveCmd
 }
