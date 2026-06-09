@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.llmrelay/
+*.key
+*.pem
+node_modules/
+dist/
+build/
+target/
+.venv/
+__pycache__/
+coverage.out
+/llm-relay
+/llm-relay.exe

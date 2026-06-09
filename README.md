@@ -1,79 +1,37 @@
 # llm-relay
 
-`llm-relay` is a Go-based LLM API relay and proxy. It is intended to run locally or on a server and forward compatible requests to configured upstream providers.
+`llm-relay` is an early Go skeleton for a local or server-side LLM API relay.
 
-Planned compatibility:
+The current repository only contains the initial command-line entry point and internal package boundaries. It does not yet implement a production relay, token authentication, upstream forwarding, usage tracking, or full OpenAI-compatible / Anthropic-compatible API behavior.
 
-- OpenAI-compatible API endpoints.
-- Anthropic-compatible API endpoints.
-- Provider configuration with `base_url` and API key references.
-- Local relay credential generation and lookup.
-
-The default configuration directory is:
-
-```text
-~/.llmrelay
-```
-
-Suggested files:
-
-```text
-~/.llmrelay/config.toml
-~/.llmrelay/tokens.json
-```
-
-## Quick Start
-
-Build and run the current CLI skeleton:
+## Current Commands
 
 ```sh
-go build -o ./llm-relay ./cmd/llm-relay
-./llm-relay version
-./llm-relay config path
+go run ./cmd/llm-relay version
+go run ./cmd/llm-relay config path
+go run ./cmd/llm-relay serve
 ```
 
-Run tests:
+The `serve` command currently prints the planned listener and route surface instead of starting a real proxy.
+
+## Development
+
+Run the local checks:
+
+```sh
+./scripts/check.sh
+```
+
+Or run Go tests directly:
 
 ```sh
 go test ./...
 ```
 
-## Example Configuration
+## Planned Direction
 
-Use placeholders in committed examples. Keep real keys in your shell, secret manager, or local untracked files.
-
-```toml
-listen_addr = "127.0.0.1:8080"
-
-[[providers]]
-name = "openai"
-kind = "openai"
-base_url = "https://api.openai.com/v1"
-api_key = "<provider-api-key>"
-
-[[providers]]
-name = "anthropic"
-kind = "anthropic"
-base_url = "https://api.anthropic.com"
-api_key = "<provider-api-key>"
-```
-
-## CLI Plan
-
-The CLI is intentionally small in this initialization:
-
-- `llm-relay version`
-- `llm-relay config path`
-- `llm-relay serve`
-
-Planned commands include:
-
-- `llm-relay init`
-- `llm-relay token create`
-- `llm-relay token list`
-- `llm-relay provider validate`
+Future work is expected to add configuration initialization, upstream provider settings, local relay token management, request forwarding, streaming responses, and access logging.
 
 ## Security
 
-Do not commit real API keys, relay credentials, deployment URLs, or local configuration files. Use `.env.example` and `examples/` only for placeholders.
-
+Do not commit real API keys, relay credentials, deployment URLs, local configuration files, or private planning notes.
