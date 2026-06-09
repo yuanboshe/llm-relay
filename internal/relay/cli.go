@@ -317,7 +317,7 @@ func generateRelayToken() (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return "llmr_" + hex.EncodeToString(b), nil
+	return tokenPrefix + hex.EncodeToString(b), nil
 }
 
 func readPID() (int, error) {

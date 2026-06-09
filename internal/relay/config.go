@@ -17,6 +17,8 @@ const (
 	configFileName = "config.json"
 	pidFileName    = "relay.pid"
 	logFileName    = "relay.log"
+	defaultAddr    = "127.0.0.1:11434"
+	tokenPrefix    = "llmr_"
 )
 
 type Config struct {
@@ -39,7 +41,7 @@ type RelayToken struct {
 
 func defaultConfig() Config {
 	return Config{
-		ListenAddr: "127.0.0.1:11434",
+		ListenAddr: defaultAddr,
 		Upstream: Upstream{
 			Provider: "openai",
 			BaseURL:  "https://api.openai.com",

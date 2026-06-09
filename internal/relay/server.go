@@ -107,7 +107,7 @@ func (s *RelayServer) Handler() http.Handler {
 			return
 		}
 		clientToken := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-		if clientToken == "" || !strings.HasPrefix(clientToken, "llmr_") || !HasToken(s.cfg, clientToken) {
+		if clientToken == "" || !strings.HasPrefix(clientToken, tokenPrefix) || !HasToken(s.cfg, clientToken) {
 			status = http.StatusUnauthorized
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
