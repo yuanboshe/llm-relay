@@ -4,7 +4,7 @@ import "testing"
 
 func TestNewServerDefaultAddr(t *testing.T) {
 	server := NewServer("")
-	if server.Addr() != "127.0.0.1:8080" {
+	if server.Addr() != "127.0.0.1:18080" {
 		t.Fatalf("Addr = %q, want default", server.Addr())
 	}
 }

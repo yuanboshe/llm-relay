@@ -8,7 +8,7 @@ type Server struct {
 // NewServer constructs a relay server with OpenAI-compatible and Anthropic-compatible route placeholders.
 func NewServer(addr string) *Server {
 	if addr == "" {
-		addr = "127.0.0.1:8080"
+		addr = "127.0.0.1:18080"
 	}
 	return &Server{addr: addr}
 }

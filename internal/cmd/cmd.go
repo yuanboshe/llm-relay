@@ -567,7 +567,7 @@ func newServeCommand() *cobra.Command {
 			return err
 		},
 	}
-	serveCmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "HTTP listen address")
+	serveCmd.Flags().StringVar(&addr, "addr", "127.0.0.1:18080", "HTTP listen address")
 
 	return serveCmd
 }
