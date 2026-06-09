@@ -91,28 +91,61 @@ func DefaultConfig() Config {
 	}
 }
 
+// Ensure creates the local configuration directory and missing initial files.
+func Ensure(paths Paths) (bool, bool, error) {
+	if err := os.MkdirAll(paths.Dir, 0o700); err != nil {
+		return false, false, err
+	}
+
+	configCreated := false
+	if _, err := os.Stat(paths.ConfigFile); err == nil {
+		// Preserve existing configuration.
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, false, err
+	} else {
+		if err := Save(paths.ConfigFile, DefaultConfig()); err != nil {
+			return false, false, err
+		}
+		configCreated = true
+	}
+
+	tokenCreated := false
+	if _, err := os.Stat(paths.TokenFile); err == nil {
+		return configCreated, tokenCreated, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, false, err
+	}
+	if err := os.WriteFile(paths.TokenFile, []byte("[]\n"), 0o600); err != nil {
+		return false, false, err
+	}
+	tokenCreated = true
+	return configCreated, tokenCreated, nil
+}
+
 // Init creates the local configuration directory and initial files.
 func Init(paths Paths, force bool) error {
-	if err := os.MkdirAll(paths.Dir, 0o700); err != nil {
+	if force {
+		if err := os.MkdirAll(paths.Dir, 0o700); err != nil {
+			return err
+		}
+		if err := Save(paths.ConfigFile, DefaultConfig()); err != nil {
+			return err
+		}
+		if _, err := os.Stat(paths.TokenFile); err == nil {
+			return nil
+		} else if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return os.WriteFile(paths.TokenFile, []byte("[]\n"), 0o600)
+	}
+	configCreated, _, err := Ensure(paths)
+	if err != nil {
 		return err
 	}
-
-	if _, err := os.Stat(paths.ConfigFile); err == nil && !force {
+	if !configCreated {
 		return fmt.Errorf("config already exists: %s", paths.ConfigFile)
-	} else if err != nil && !os.IsNotExist(err) {
-		return err
 	}
-
-	if err := Save(paths.ConfigFile, DefaultConfig()); err != nil {
-		return err
-	}
-
-	if _, err := os.Stat(paths.TokenFile); err == nil {
-		return nil
-	} else if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return os.WriteFile(paths.TokenFile, []byte("[]\n"), 0o600)
+	return nil
 }
 
 // Load reads a config.toml file.
@@ -120,7 +153,7 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Config{}, fmt.Errorf("config not found: %s; run llmrelay init", path)
+			return Config{}, fmt.Errorf("config not found: %s; run llmrelay install", path)
 		}
 		return Config{}, err
 	}

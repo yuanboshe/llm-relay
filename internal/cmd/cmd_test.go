@@ -11,6 +11,14 @@ import (
 	"testing"
 )
 
+func setInstallTestHome(t *testing.T) string {
+	t.Helper()
+	installHome := t.TempDir()
+	t.Setenv("LLMRELAY_INSTALL_HOME", installHome)
+	t.Setenv("LLMRELAY_ZSHRC", filepath.Join(t.TempDir(), ".zshrc"))
+	return installHome
+}
+
 func TestRunVersion(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -56,8 +64,8 @@ func TestRunServeRequiresConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run(serve) returned nil error, want missing config error")
 	}
-	if !strings.Contains(err.Error(), "run llmrelay init") {
-		t.Fatalf("error = %q, want init hint", err.Error())
+	if !strings.Contains(err.Error(), "run llmrelay install") {
+		t.Fatalf("error = %q, want install hint", err.Error())
 	}
 }
 
@@ -76,9 +84,14 @@ func TestRunHelpUsesFinalCommandName(t *testing.T) {
 	if strings.Contains(out, "llm-relay <command>") {
 		t.Fatalf("help output = %q, still contains old command usage", out)
 	}
-	for _, want := range []string{"start", "stop", "restart", "status", "logs"} {
+	for _, want := range []string{"install", "setup", "start", "stop", "restart", "status", "logs"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("help output = %q, want %q command", out, want)
+		}
+	}
+	for _, removed := range []string{"init", "upstream"} {
+		if strings.Contains(out, removed) {
+			t.Fatalf("help output = %q, should not show removed command %q", out, removed)
 		}
 	}
 }
@@ -179,14 +192,15 @@ func TestRunCompletionBash(t *testing.T) {
 	}
 }
 
-func TestRunInitCreatesConfigInEnvHome(t *testing.T) {
+func TestRunInstallCreatesConfigInEnvHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	installHome := setInstallTestHome(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if err := Run([]string{"init"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(init) returned error: %v", err)
+	if err := Run([]string{"install"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(install) returned error: %v", err)
 	}
 
 	configPath := filepath.Join(home, "config.toml")
@@ -196,6 +210,86 @@ func TestRunInitCreatesConfigInEnvHome(t *testing.T) {
 	tokenPath := filepath.Join(home, "tokens.json")
 	if _, err := os.Stat(tokenPath); err != nil {
 		t.Fatalf("token file not created: %v", err)
+	}
+	installed := filepath.Join(installHome, "Library", "Application Support", "llmrelay", "bin", "llmrelay")
+	if _, err := os.Stat(installed); err != nil {
+		t.Fatalf("installed binary not created at final command name: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "installed: "+installed) {
+		t.Fatalf("install output = %q, want installed path", stdout.String())
+	}
+}
+
+func TestRunInitIsRemoved(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := Run([]string{"init"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(init) returned nil error, want removed command error")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("error = %q, want unknown command", err.Error())
+	}
+}
+
+func TestRunConfigPathIsRemoved(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := Run([]string{"config", "path"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(config path) returned nil error, want removed command error")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("error = %q, want unknown command", err.Error())
+	}
+}
+
+func TestRunSetupConfiguresUpstreamAndCreatesToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
+	keyValue := strings.Join([]string{"setup", "secret", "value"}, "-")
+	input := strings.Join([]string{
+		"https://api.example.test/v1/",
+		keyValue,
+		"local",
+	}, "\n") + "\n"
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := RunWithIO([]string{"setup"}, strings.NewReader(input), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(setup) returned error: %v", err)
+	}
+
+	configData, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	configText := string(configData)
+	if !strings.Contains(configText, `base_url = "https://api.example.test/v1"`) {
+		t.Fatalf("config = %q, want normalized base URL", configText)
+	}
+	if !strings.Contains(configText, `api_key_source = "inline"`) {
+		t.Fatalf("config = %q, want inline key source", configText)
+	}
+	if !strings.Contains(configText, keyValue) {
+		t.Fatalf("config = %q, want configured key", configText)
+	}
+	tokenData, err := os.ReadFile(filepath.Join(home, "tokens.json"))
+	if err != nil {
+		t.Fatalf("read token store: %v", err)
+	}
+	if !strings.Contains(string(tokenData), `"key_id": "local"`) {
+		t.Fatalf("tokens = %q, want local token", string(tokenData))
+	}
+	out := stdout.String()
+	if strings.Contains(out, keyValue) {
+		t.Fatalf("setup output leaked upstream key: %q", out)
+	}
+	if !strings.Contains(out, "relay token: llmr_") {
+		t.Fatalf("setup output = %q, want one-time relay token", out)
 	}
 }
 
@@ -236,11 +330,12 @@ api_key = "%s"
 func TestRunTokenCreateStoresOnlyHash(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if err := Run([]string{"init"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(init) returned error: %v", err)
+	if err := Run([]string{"install"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(install) returned error: %v", err)
 	}
 	stdout.Reset()
 	stderr.Reset()
@@ -269,11 +364,12 @@ func TestRunTokenCreateStoresOnlyHash(t *testing.T) {
 func TestRunTokenLifecycle(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
 	for _, args := range [][]string{
-		{"init"},
+		{"install"},
 		{"token", "create", "local"},
 		{"token", "disable", "local"},
 	} {
@@ -326,13 +422,14 @@ func TestRunTokenLifecycle(t *testing.T) {
 func TestRunTokenMetadataAndVerify(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	nameValue := strings.Join([]string{"example", "token", "name"}, " ")
 	noteValue := strings.Join([]string{"example", "token", "note"}, " ")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
 	for _, args := range [][]string{
-		{"init"},
+		{"install"},
 		{"token", "create", "local", "--name", nameValue, "--note", noteValue},
 	} {
 		stdout.Reset()
@@ -411,16 +508,17 @@ func TestRunTokenMetadataAndVerify(t *testing.T) {
 	}
 }
 
-func TestRunUpstreamSetURLAndShow(t *testing.T) {
+func TestRunConfigSetURLAndShow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
 	for _, args := range [][]string{
-		{"init"},
-		{"upstream", "set-url", "https://api.example.test/v1/"},
-		{"upstream", "show"},
+		{"install"},
+		{"config", "set-url", "https://api.example.test/v1/"},
+		{"config", "show"},
 	} {
 		stdout.Reset()
 		stderr.Reset()
@@ -431,43 +529,45 @@ func TestRunUpstreamSetURLAndShow(t *testing.T) {
 
 	out := stdout.String()
 	if !strings.Contains(out, `base_url = "https://api.example.test/v1"`) {
-		t.Fatalf("upstream show = %q, want normalized base URL", out)
+		t.Fatalf("config show = %q, want normalized base URL", out)
 	}
 }
 
-func TestRunUpstreamSetKeyStdinRedactsShow(t *testing.T) {
+func TestRunConfigSetKeyStdinRedactsShow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	keyValue := strings.Join([]string{"runtime", "key", "value"}, "-")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if err := Run([]string{"init"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(init) returned error: %v", err)
+	if err := Run([]string{"install"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(install) returned error: %v", err)
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if err := RunWithIO([]string{"upstream", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
-		t.Fatalf("Run(upstream set-key --stdin) returned error: %v", err)
+	if err := RunWithIO([]string{"config", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(config set-key --stdin) returned error: %v", err)
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if err := Run([]string{"upstream", "show"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(upstream show) returned error: %v", err)
+	if err := Run([]string{"config", "show"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(config show) returned error: %v", err)
 	}
 
 	out := stdout.String()
 	if strings.Contains(out, keyValue) {
-		t.Fatalf("upstream show leaked key: %q", out)
+		t.Fatalf("config show leaked key: %q", out)
 	}
 	if !strings.Contains(out, "<redacted>") {
-		t.Fatalf("upstream show = %q, want redacted key", out)
+		t.Fatalf("config show = %q, want redacted key", out)
 	}
 }
 
-func TestRunUpstreamTestUsesKeyWithoutPrintingIt(t *testing.T) {
+func TestRunConfigTestUsesKeyWithoutPrintingIt(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	keyValue := strings.Join([]string{"runtime", "test", "key"}, "-")
 	var seenAuth string
 	var seenPath string
@@ -481,8 +581,8 @@ func TestRunUpstreamTestUsesKeyWithoutPrintingIt(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	commands := [][]string{
-		{"init"},
-		{"upstream", "set-url", server.URL},
+		{"install"},
+		{"config", "set-url", server.URL},
 	}
 	for _, args := range commands {
 		stdout.Reset()
@@ -493,14 +593,14 @@ func TestRunUpstreamTestUsesKeyWithoutPrintingIt(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if err := RunWithIO([]string{"upstream", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
-		t.Fatalf("Run(upstream set-key --stdin) returned error: %v", err)
+	if err := RunWithIO([]string{"config", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(config set-key --stdin) returned error: %v", err)
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Run([]string{"upstream", "test", "--path", "/v1/models"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(upstream test) returned error: %v", err)
+	if err := Run([]string{"config", "test", "--path", "/v1/models"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(config test) returned error: %v", err)
 	}
 
 	if seenAuth != "Bearer "+keyValue {
@@ -511,10 +611,23 @@ func TestRunUpstreamTestUsesKeyWithoutPrintingIt(t *testing.T) {
 	}
 	out := stdout.String()
 	if strings.Contains(out, keyValue) {
-		t.Fatalf("upstream test leaked key: %q", out)
+		t.Fatalf("config test leaked key: %q", out)
 	}
 	if !strings.Contains(out, "status: 200") {
-		t.Fatalf("upstream test output = %q, want status", out)
+		t.Fatalf("config test output = %q, want status", out)
+	}
+}
+
+func TestRunUpstreamIsRemoved(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := Run([]string{"upstream", "show"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(upstream show) returned nil error, want removed command error")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("error = %q, want unknown command", err.Error())
 	}
 }
 
@@ -528,22 +641,23 @@ func TestRunConfigValidateReportsMissingConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run(config validate) returned nil error, want missing config error")
 	}
-	if !strings.Contains(err.Error(), "run llmrelay init") {
-		t.Fatalf("error = %q, want init hint", err.Error())
+	if !strings.Contains(err.Error(), "run llmrelay install") {
+		t.Fatalf("error = %q, want install hint", err.Error())
 	}
 }
 
 func TestRunConfigValidateChecksEnvKeyReference(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	envName := "LLMRELAY_TEST_MISSING_KEY"
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
 	for _, args := range [][]string{
-		{"init"},
-		{"upstream", "set-url", "https://api.example.test/v1"},
-		{"upstream", "set-key", "--env", envName},
+		{"install"},
+		{"config", "set-url", "https://api.example.test/v1"},
+		{"config", "set-key", "--env", envName},
 	} {
 		stdout.Reset()
 		stderr.Reset()
@@ -566,13 +680,14 @@ func TestRunConfigValidateChecksEnvKeyReference(t *testing.T) {
 func TestRunConfigValidateSucceedsForInlineKeyWithoutPrintingIt(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	keyValue := strings.Join([]string{"local", "inline", "value"}, "-")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
 	for _, args := range [][]string{
-		{"init"},
-		{"upstream", "set-url", "https://api.example.test/v1"},
+		{"install"},
+		{"config", "set-url", "https://api.example.test/v1"},
 	} {
 		stdout.Reset()
 		stderr.Reset()
@@ -582,8 +697,8 @@ func TestRunConfigValidateSucceedsForInlineKeyWithoutPrintingIt(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if err := RunWithIO([]string{"upstream", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
-		t.Fatalf("Run(upstream set-key --stdin) returned error: %v", err)
+	if err := RunWithIO([]string{"config", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(config set-key --stdin) returned error: %v", err)
 	}
 
 	stdout.Reset()
@@ -660,6 +775,7 @@ func TestRunDoctorReportsUninitializedHome(t *testing.T) {
 func TestRunDoctorReportsConfiguredEnvironment(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
 	envName := "LLMRELAY_TEST_DOCTOR_KEY"
 	keyValue := strings.Join([]string{"doctor", "runtime", "value"}, "-")
 	t.Setenv(envName, keyValue)
@@ -667,9 +783,9 @@ func TestRunDoctorReportsConfiguredEnvironment(t *testing.T) {
 	var stderr bytes.Buffer
 
 	for _, args := range [][]string{
-		{"init"},
-		{"upstream", "set-url", "https://api.example.test/v1"},
-		{"upstream", "set-key", "--env", envName},
+		{"install"},
+		{"config", "set-url", "https://api.example.test/v1"},
+		{"config", "set-key", "--env", envName},
 		{"token", "create", "local"},
 		{"token", "disable", "local"},
 	} {

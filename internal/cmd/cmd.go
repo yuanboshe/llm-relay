@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/yuanboshe/llm-relay/internal/config"
+	"github.com/yuanboshe/llm-relay/internal/install"
 	"github.com/yuanboshe/llm-relay/internal/relay"
 	"github.com/yuanboshe/llm-relay/internal/service"
 	"github.com/yuanboshe/llm-relay/internal/tokenstore"
@@ -54,11 +57,11 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 	}
 
 	root.AddCommand(
-		newInitCommand(),
+		newInstallCommand(root),
+		newSetupCommand(stdin),
 		newVersionCommand(),
-		newConfigCommand(),
+		newConfigCommand(stdin),
 		newTokenCommand(),
-		newUpstreamCommand(stdin),
 		newServeCommand(),
 		newStartCommand(),
 		newStopCommand(),
@@ -70,38 +73,6 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 	)
 
 	return root
-}
-
-func newUpstreamCommand(stdin io.Reader) *cobra.Command {
-	upstreamCmd := &cobra.Command{
-		Use:   "upstream",
-		Short: "Manage upstream provider configuration",
-	}
-
-	upstreamCmd.AddCommand(
-		newUpstreamShowCommand(),
-		newUpstreamSetURLCommand(),
-		newUpstreamSetKeyCommand(stdin),
-		newUpstreamTestCommand(),
-	)
-
-	return upstreamCmd
-}
-
-func newUpstreamShowCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "show",
-		Short: "Show upstream configuration",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprint(cmd.OutOrStdout(), config.FormatRedacted(cfg))
-			return err
-		},
-	}
 }
 
 func newUpstreamSetURLCommand() *cobra.Command {
@@ -596,28 +567,143 @@ func loadTokenRecords() (*tokenstore.Store, []tokenstore.Record, error) {
 	return store, records, nil
 }
 
-func newInitCommand() *cobra.Command {
-	var force bool
+func newInstallCommand(root *cobra.Command) *cobra.Command {
+	return &cobra.Command{
+		Use:   "install",
+		Short: "Install llmrelay for the current user",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourcePath, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			paths, err := config.DefaultPaths()
+			if err != nil {
+				return err
+			}
+			var completion bytes.Buffer
+			if err := root.GenZshCompletion(&completion); err != nil {
+				return err
+			}
+			result, err := install.Run(install.Options{
+				SourcePath:    sourcePath,
+				UserHome:      os.Getenv("LLMRELAY_INSTALL_HOME"),
+				ZshrcPath:     os.Getenv("LLMRELAY_ZSHRC"),
+				ConfigPaths:   paths,
+				ZshCompletion: completion.String(),
+			})
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if _, err := fmt.Fprintf(out, "installed: %s\n", result.InstalledPath); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "command: %s\n", result.SymlinkPath); err != nil {
+				return err
+			}
+			if result.ConfigCreated {
+				if _, err := fmt.Fprintf(out, "config: created %s\n", paths.ConfigFile); err != nil {
+					return err
+				}
+			} else if _, err := fmt.Fprintf(out, "config: kept %s\n", paths.ConfigFile); err != nil {
+				return err
+			}
+			if result.TokenStoreCreated {
+				if _, err := fmt.Fprintf(out, "tokens: created %s\n", paths.TokenFile); err != nil {
+					return err
+				}
+			} else if _, err := fmt.Fprintf(out, "tokens: kept %s\n", paths.TokenFile); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(out, "zshrc: updated %s\n", result.ZshrcPath)
+			return err
+		},
+	}
+}
 
-	initCmd := &cobra.Command{
-		Use:   "init",
-		Short: "Initialize local configuration",
+func newSetupCommand(stdin io.Reader) *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup",
+		Short: "Run the first-time setup wizard",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			paths, err := config.DefaultPaths()
 			if err != nil {
 				return err
 			}
-			if err := config.Init(paths, force); err != nil {
+			if _, _, err := config.Ensure(paths); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "initialized llmrelay config at %s\n", paths.ConfigFile)
+			cfg, err := config.Load(paths.ConfigFile)
+			if err != nil {
+				return err
+			}
+			reader := bufio.NewReader(stdin)
+			baseURL, err := promptLine(cmd.ErrOrStderr(), reader, "upstream base_url: ")
+			if err != nil {
+				return err
+			}
+			if baseURL != "" {
+				normalized, err := normalizeBaseURL(baseURL)
+				if err != nil {
+					return err
+				}
+				cfg.Upstream.BaseURL = normalized
+			}
+			apiKey, err := promptLine(cmd.ErrOrStderr(), reader, "upstream API key: ")
+			if err != nil {
+				return err
+			}
+			if apiKey != "" {
+				cfg.Upstream.APIKeySource = "inline"
+				cfg.Upstream.APIKeyEnv = ""
+				cfg.Upstream.APIKey = apiKey
+			}
+			if err := config.Save(paths.ConfigFile, cfg); err != nil {
+				return err
+			}
+
+			keyID, err := promptLine(cmd.ErrOrStderr(), reader, "relay token key-id [local]: ")
+			if err != nil {
+				return err
+			}
+			if keyID == "" {
+				keyID = "local"
+			}
+			store := tokenstore.New(paths.TokenFile)
+			records, err := store.Load()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if _, _, err := tokenstore.Find(records, keyID); err == nil {
+				_, err = fmt.Fprintf(out, "relay token: kept existing key-id %s\n", keyID)
+				return err
+			}
+			token, err := tokenstore.GenerateToken()
+			if err != nil {
+				return err
+			}
+			records = append(records, tokenstore.NewRecord(keyID, token, time.Now()))
+			if err := store.Save(records); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(out, "key-id: %s\nrelay token: %s\n", keyID, token)
 			return err
 		},
 	}
-	initCmd.Flags().BoolVar(&force, "force", false, "overwrite existing config")
+}
 
-	return initCmd
+func promptLine(out io.Writer, reader *bufio.Reader, prompt string) (string, error) {
+	if _, err := fmt.Fprint(out, prompt); err != nil {
+		return "", err
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func newVersionCommand() *cobra.Command {
@@ -632,25 +718,16 @@ func newVersionCommand() *cobra.Command {
 	}
 }
 
-func newConfigCommand() *cobra.Command {
+func newConfigCommand(stdin io.Reader) *cobra.Command {
 	configCmd := &cobra.Command{
 		Use:   "config",
 		Short: "Manage local configuration",
-	}
-
-	configCmd.AddCommand(&cobra.Command{
-		Use:   "path",
-		Short: "Print default config path",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			paths, err := config.DefaultPaths()
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), paths.ConfigFile)
-			return err
+			return cmd.Help()
 		},
-	})
+	}
+
 	configCmd.AddCommand(&cobra.Command{
 		Use:   "show",
 		Short: "Show local configuration",
@@ -688,6 +765,11 @@ func newConfigCommand() *cobra.Command {
 			return err
 		},
 	})
+	configCmd.AddCommand(
+		newUpstreamSetURLCommand(),
+		newUpstreamSetKeyCommand(stdin),
+		newUpstreamTestCommand(),
+	)
 
 	return configCmd
 }
@@ -700,7 +782,7 @@ func validateConfig(paths config.Paths, cfg config.Config) error {
 		return fmt.Errorf("listen_addr is empty")
 	}
 	if cfg.Upstream.BaseURL == "" {
-		return fmt.Errorf("upstream base_url is not configured; run llmrelay upstream set-url <base-url>")
+		return fmt.Errorf("upstream base_url is not configured; run llmrelay config set-url <base-url>")
 	}
 	if _, err := normalizeBaseURL(cfg.Upstream.BaseURL); err != nil {
 		return err
@@ -798,7 +880,11 @@ func newStartCommand() *cobra.Command {
 		Short: "Start llmrelay in the background",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			status, err := newServiceManager().Start()
+			manager, err := newServiceManager()
+			if err != nil {
+				return err
+			}
+			status, err := manager.Start()
 			if err != nil {
 				return err
 			}
@@ -813,7 +899,11 @@ func newStopCommand() *cobra.Command {
 		Short: "Stop the background llmrelay process",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			status, err := newServiceManager().Stop()
+			manager, err := newServiceManager()
+			if err != nil {
+				return err
+			}
+			status, err := manager.Stop()
 			if err != nil {
 				return err
 			}
@@ -828,7 +918,11 @@ func newRestartCommand() *cobra.Command {
 		Short: "Restart the background llmrelay process",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			status, err := newServiceManager().Restart()
+			manager, err := newServiceManager()
+			if err != nil {
+				return err
+			}
+			status, err := manager.Restart()
 			if err != nil {
 				return err
 			}
@@ -843,7 +937,11 @@ func newStatusCommand() *cobra.Command {
 		Short: "Show background llmrelay process status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			status, err := newServiceManager().Status()
+			manager, err := newServiceManager()
+			if err != nil {
+				return err
+			}
+			status, err := manager.Status()
 			if err != nil {
 				return err
 			}
@@ -883,20 +981,55 @@ func newLogsCommand() *cobra.Command {
 	return logsCmd
 }
 
-func newServiceManager() service.Manager {
+type backgroundManager interface {
+	Start() (service.Status, error)
+	Stop() (service.Status, error)
+	Restart() (service.Status, error)
+	Status() (service.Status, error)
+}
+
+func newServiceManager() (backgroundManager, error) {
 	paths, err := config.DefaultPaths()
 	if err != nil {
-		return service.Manager{}
+		return nil, err
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		executable = ""
+	executable := installedExecutablePath()
+	if runtime.GOOS == "darwin" {
+		manager, err := service.DefaultLaunchAgentManager(executable, paths.LogFile)
+		if err != nil {
+			return nil, err
+		}
+		return manager, nil
 	}
 	return service.Manager{
 		PIDFile:    paths.PIDFile,
 		LogFile:    paths.LogFile,
 		Executable: executable,
+	}, nil
+}
+
+func installedExecutablePath() string {
+	home := os.Getenv("LLMRELAY_INSTALL_HOME")
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			executable, exeErr := os.Executable()
+			if exeErr == nil {
+				return executable
+			}
+			return ""
+		}
 	}
+	installed := filepath.Join(home, "Library", "Application Support", "llmrelay", "bin", "llmrelay")
+	if _, err := os.Stat(installed); err == nil {
+		return installed
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return installed
+	}
+	return executable
 }
 
 func printServiceStatus(out io.Writer, status service.Status) error {
