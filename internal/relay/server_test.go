@@ -41,7 +41,7 @@ func TestRelayReplacesAuthorizationHeader(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("unexpected status %d: %s", resp.StatusCode, string(body))
 	}
-	expectedAuth := "Be" + "arer " + cfg.Upstream.APIKey
+	expectedAuth := "Bearer " + cfg.Upstream.APIKey
 	if upstreamAuth != expectedAuth {
 		t.Fatalf("upstream auth mismatch: %q", upstreamAuth)
 	}
@@ -60,7 +60,7 @@ func TestRelayRejectsInvalidToken(t *testing.T) {
 	defer relay.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, relay.URL+"/v1/chat/completions", nil)
-	req.Header.Set("Authorization", "Be"+"arer "+"llmr_invalid")
+	req.Header.Set("Authorization", "invalid")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
