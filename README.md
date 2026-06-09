@@ -2,7 +2,7 @@
 
 `llm-relay` is a Go CLI for running a local LLM API relay. Its command-line binary is `llmrelay`.
 
-The current repository contains local configuration, relay token management, single-upstream configuration, HTTP request forwarding, optional SSH reverse tunnel support, diagnostic commands, and local install support. It does not yet implement background process management, usage tracking, quotas, or rate limits.
+The current repository contains local configuration, relay token management, single-upstream configuration, HTTP request forwarding, optional SSH reverse tunnel support with reconnects, background process commands, diagnostic commands, and local install support. It does not yet implement usage tracking, quotas, or rate limits.
 
 ## Current Commands
 
@@ -22,6 +22,11 @@ go run ./cmd/llmrelay upstream test --path /v1/models
 go run ./cmd/llmrelay doctor
 go run ./cmd/llmrelay upstream show
 go run ./cmd/llmrelay serve
+go run ./cmd/llmrelay start
+go run ./cmd/llmrelay stop
+go run ./cmd/llmrelay restart
+go run ./cmd/llmrelay status
+go run ./cmd/llmrelay logs
 go run ./cmd/llmrelay completion bash
 ```
 
@@ -47,10 +52,18 @@ Create a relay token and keep the plaintext value. The token is only printed onc
 llmrelay token create local --name "Local client"
 ```
 
-Run the relay:
+Run the relay in the foreground:
 
 ```sh
 llmrelay serve
+```
+
+Run the relay in the background:
+
+```sh
+llmrelay start
+llmrelay status
+llmrelay logs --tail 50
 ```
 
 ## Configuration
@@ -75,7 +88,7 @@ remote_host = "127.0.0.1"
 remote_port = "18080"
 ```
 
-`tokens.json` is managed by `llmrelay token ...` commands. Relay tokens are stored as SHA-256 hashes, not plaintext.
+`tokens.json` is managed by `llmrelay token ...` commands. Relay tokens are stored as SHA-256 hashes, not plaintext. Background runs write `~/.llmrelay/llmrelay.pid` and append process output to `~/.llmrelay/llmrelay.log`.
 
 ## LAN Entry
 
@@ -132,6 +145,8 @@ base_url = https://llm.example.test
 api_key = llmr_xxx
 ```
 
+When the tunnel exits unexpectedly, `llmrelay serve` retries it with backoff and writes tunnel state changes to the process log.
+
 ## Development
 
 Run the local checks:
@@ -154,7 +169,7 @@ make install
 
 ## Planned Direction
 
-Future work is expected to add access logging, local process management, usage tracking, quotas, and rate limits.
+Future work is expected to add access logging, usage tracking, quotas, and rate limits.
 
 ## Security
 

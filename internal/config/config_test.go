@@ -22,6 +22,12 @@ func TestDefaultPaths(t *testing.T) {
 	if filepath.Base(paths.TokenFile) != DefaultStoreName {
 		t.Fatalf("TokenFile = %q, want suffix %q", paths.TokenFile, DefaultStoreName)
 	}
+	if filepath.Base(paths.PIDFile) != DefaultPIDName {
+		t.Fatalf("PIDFile = %q, want suffix %q", paths.PIDFile, DefaultPIDName)
+	}
+	if filepath.Base(paths.LogFile) != DefaultLogName {
+		t.Fatalf("LogFile = %q, want suffix %q", paths.LogFile, DefaultLogName)
+	}
 }
 
 func TestDefaultPathsHonorsLLMRelayHome(t *testing.T) {
@@ -41,6 +47,12 @@ func TestDefaultPathsHonorsLLMRelayHome(t *testing.T) {
 	}
 	if paths.TokenFile != filepath.Join(home, DefaultStoreName) {
 		t.Fatalf("TokenFile = %q, want token store under env home", paths.TokenFile)
+	}
+	if paths.PIDFile != filepath.Join(home, DefaultPIDName) {
+		t.Fatalf("PIDFile = %q, want pid file under env home", paths.PIDFile)
+	}
+	if paths.LogFile != filepath.Join(home, DefaultLogName) {
+		t.Fatalf("LogFile = %q, want log file under env home", paths.LogFile)
 	}
 }
 

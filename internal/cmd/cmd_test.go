@@ -76,6 +76,93 @@ func TestRunHelpUsesFinalCommandName(t *testing.T) {
 	if strings.Contains(out, "llm-relay <command>") {
 		t.Fatalf("help output = %q, still contains old command usage", out)
 	}
+	for _, want := range []string{"start", "stop", "restart", "status", "logs"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help output = %q, want %q command", out, want)
+		}
+	}
+}
+
+func TestRunStatusReportsStopped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run([]string{"status"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(status) returned error: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "state: stopped") {
+		t.Fatalf("status output = %q, want stopped state", out)
+	}
+	if !strings.Contains(out, filepath.Join(home, "llmrelay.pid")) {
+		t.Fatalf("status output = %q, want pid path", out)
+	}
+	if !strings.Contains(out, filepath.Join(home, "llmrelay.log")) {
+		t.Fatalf("status output = %q, want log path", out)
+	}
+}
+
+func TestRunStatusReportsConfiguredTunnel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	configText := `listen_addr = "127.0.0.1:18080"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+api_key_source = ""
+api_key_env = ""
+api_key = ""
+
+[tunnel]
+enabled = true
+ssh_host = "relay-server"
+ssh_user = "ubuntu"
+ssh_port = "22"
+remote_host = "127.0.0.1"
+remote_port = "28080"
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run([]string{"status"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(status) returned error: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "tunnel: enabled") {
+		t.Fatalf("status output = %q, want tunnel enabled", out)
+	}
+	if !strings.Contains(out, "tunnel-remote: 127.0.0.1:28080") {
+		t.Fatalf("status output = %q, want tunnel remote", out)
+	}
+}
+
+func TestRunLogsReadsTail(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	logPath := filepath.Join(home, "llmrelay.log")
+	if err := os.WriteFile(logPath, []byte("one\ntwo\nthree\n"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run([]string{"logs", "--tail", "2"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(logs --tail 2) returned error: %v", err)
+	}
+	if stdout.String() != "two\nthree\n" {
+		t.Fatalf("logs output = %q, want last two lines", stdout.String())
+	}
 }
 
 func TestRunCompletionBash(t *testing.T) {

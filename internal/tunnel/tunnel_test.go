@@ -1,9 +1,13 @@
 package tunnel
 
 import (
+	"context"
+	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuanboshe/llm-relay/internal/config"
 )
@@ -63,5 +67,74 @@ func TestBuildSSHArgsRequiresTunnelFields(t *testing.T) {
 
 	if _, err := BuildSSHArgs(cfg); err == nil {
 		t.Fatal("BuildSSHArgs returned nil error, want missing ssh host error")
+	}
+}
+
+type fakeSupervisorStarter struct {
+	results []*Process
+	errs    []error
+	starts  int
+}
+
+func (f *fakeSupervisorStarter) Start(ctx context.Context, cfg config.Config, stderr io.Writer) (*Process, error) {
+	idx := f.starts
+	f.starts++
+	if idx < len(f.errs) && f.errs[idx] != nil {
+		return nil, f.errs[idx]
+	}
+	if idx < len(f.results) && f.results[idx] != nil {
+		return f.results[idx], nil
+	}
+	done := make(chan error, 1)
+	done <- nil
+	return &Process{done: done}, nil
+}
+
+func TestSupervisorRetriesAfterTunnelExit(t *testing.T) {
+	cfg := config.DefaultConfig()
+	firstDone := make(chan error, 1)
+	firstDone <- errors.New("ssh exited")
+	secondDone := make(chan error)
+	starts := &fakeSupervisorStarter{
+		results: []*Process{
+			{done: firstDone},
+			{done: secondDone},
+		},
+	}
+	sleeps := make([]time.Duration, 0, 2)
+	supervisor := Supervisor{
+		Starter: starts,
+		Pause: func(ctx context.Context, d time.Duration) error {
+			sleeps = append(sleeps, d)
+			return nil
+		},
+		MinBackoff: 10 * time.Millisecond,
+		MaxBackoff: 40 * time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- supervisor.Run(ctx, cfg, io.Discard)
+	}()
+
+	deadline := time.After(2 * time.Second)
+	for starts.starts < 2 {
+		select {
+		case <-deadline:
+			t.Fatal("supervisor did not restart tunnel")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if got := supervisor.Status(); got.State != StateRunning {
+		t.Fatalf("status = %#v, want running", got)
+	}
+	if len(sleeps) == 0 {
+		t.Fatal("expected supervisor to back off before restarting")
+	}
+	cancel()
+	close(secondDone)
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("Run returned %v, want context.Canceled", err)
 	}
 }

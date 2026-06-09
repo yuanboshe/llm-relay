@@ -12,6 +12,8 @@ const (
 	DefaultDirName    = ".llmrelay"
 	DefaultConfigName = "config.toml"
 	DefaultStoreName  = "tokens.json"
+	DefaultPIDName    = "llmrelay.pid"
+	DefaultLogName    = "llmrelay.log"
 )
 
 // Paths contains the default local files used by llm-relay.
@@ -19,6 +21,8 @@ type Paths struct {
 	Dir        string
 	ConfigFile string
 	TokenFile  string
+	PIDFile    string
+	LogFile    string
 }
 
 // Upstream describes the single configured upstream provider for the current MVP.
@@ -53,6 +57,8 @@ func DefaultPaths() (Paths, error) {
 			Dir:        home,
 			ConfigFile: filepath.Join(home, DefaultConfigName),
 			TokenFile:  filepath.Join(home, DefaultStoreName),
+			PIDFile:    filepath.Join(home, DefaultPIDName),
+			LogFile:    filepath.Join(home, DefaultLogName),
 		}, nil
 	}
 
@@ -66,6 +72,8 @@ func DefaultPaths() (Paths, error) {
 		Dir:        dir,
 		ConfigFile: filepath.Join(dir, DefaultConfigName),
 		TokenFile:  filepath.Join(dir, DefaultStoreName),
+		PIDFile:    filepath.Join(dir, DefaultPIDName),
+		LogFile:    filepath.Join(dir, DefaultLogName),
 	}, nil
 }
 

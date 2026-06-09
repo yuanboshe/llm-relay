@@ -8,13 +8,16 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/yuanboshe/llm-relay/internal/config"
 	"github.com/yuanboshe/llm-relay/internal/relay"
+	"github.com/yuanboshe/llm-relay/internal/service"
 	"github.com/yuanboshe/llm-relay/internal/tokenstore"
 	"github.com/yuanboshe/llm-relay/internal/tunnel"
 )
@@ -57,6 +60,11 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 		newTokenCommand(),
 		newUpstreamCommand(stdin),
 		newServeCommand(),
+		newStartCommand(),
+		newStopCommand(),
+		newRestartCommand(),
+		newStatusCommand(),
+		newLogsCommand(),
 		newCompletionCommand(root),
 		newDoctorCommand(),
 	)
@@ -764,35 +772,175 @@ func newServeCommand() *cobra.Command {
 				Config: cfg,
 				Tokens: records,
 			})
-			serveCtx, cancel := context.WithCancel(cmd.Context())
-			defer cancel()
-			tunnelErr := make(chan error, 1)
+			serveCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			if cfg.Tunnel.Enabled {
-				process, err := tunnel.Start(serveCtx, cfg, cmd.ErrOrStderr())
-				if err != nil {
-					return fmt.Errorf("start ssh tunnel: %w", err)
-				}
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "ssh reverse tunnel enabled: %s:%s\n", cfg.Tunnel.RemoteHost, cfg.Tunnel.RemotePort)
+				supervisor := &tunnel.Supervisor{}
 				go func() {
-					if err := <-process.Done(); err != nil {
-						tunnelErr <- err
-						cancel()
+					if err := supervisor.Run(serveCtx, cfg, cmd.ErrOrStderr()); err != nil && err != context.Canceled {
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "ssh tunnel supervisor exited: %v\n", err)
 					}
 				}()
 			}
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "llmrelay serving on %s\n", server.Addr())
-			err = server.ListenAndServe(serveCtx)
-			select {
-			case tunnelExitErr := <-tunnelErr:
-				return fmt.Errorf("ssh tunnel exited: %w", tunnelExitErr)
-			default:
-			}
-			return err
+			return server.ListenAndServe(serveCtx)
 		},
 	}
 	serveCmd.Flags().StringVar(&addr, "addr", "", "override HTTP listen address")
 
 	return serveCmd
+}
+
+func newStartCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "start",
+		Short: "Start llmrelay in the background",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			status, err := newServiceManager().Start()
+			if err != nil {
+				return err
+			}
+			return printServiceStatus(cmd.OutOrStdout(), status)
+		},
+	}
+}
+
+func newStopCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the background llmrelay process",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			status, err := newServiceManager().Stop()
+			if err != nil {
+				return err
+			}
+			return printServiceStatus(cmd.OutOrStdout(), status)
+		},
+	}
+}
+
+func newRestartCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the background llmrelay process",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			status, err := newServiceManager().Restart()
+			if err != nil {
+				return err
+			}
+			return printServiceStatus(cmd.OutOrStdout(), status)
+		},
+	}
+}
+
+func newStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show background llmrelay process status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			status, err := newServiceManager().Status()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if err := printServiceStatus(out, status); err != nil {
+				return err
+			}
+			cfg, _, err := loadConfig()
+			if err == nil {
+				return printTunnelStatus(out, cfg)
+			}
+			return nil
+		},
+	}
+}
+
+func newLogsCommand() *cobra.Command {
+	var tail int
+	logsCmd := &cobra.Command{
+		Use:   "logs",
+		Short: "Print background llmrelay logs",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := config.DefaultPaths()
+			if err != nil {
+				return err
+			}
+			out, err := service.TailLog(paths.LogFile, tail)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprint(cmd.OutOrStdout(), out)
+			return err
+		},
+	}
+	logsCmd.Flags().IntVar(&tail, "tail", 100, "number of log lines to print")
+	return logsCmd
+}
+
+func newServiceManager() service.Manager {
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		return service.Manager{}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		executable = ""
+	}
+	return service.Manager{
+		PIDFile:    paths.PIDFile,
+		LogFile:    paths.LogFile,
+		Executable: executable,
+	}
+}
+
+func printServiceStatus(out io.Writer, status service.Status) error {
+	if status.State == "" {
+		status.State = service.StateStopped
+	}
+	if _, err := fmt.Fprintf(out, "state: %s\n", status.State); err != nil {
+		return err
+	}
+	if status.PID > 0 {
+		if _, err := fmt.Fprintf(out, "pid: %d\n", status.PID); err != nil {
+			return err
+		}
+	}
+	if status.PIDFile != "" {
+		if _, err := fmt.Fprintf(out, "pid-file: %s\n", status.PIDFile); err != nil {
+			return err
+		}
+	}
+	if status.LogFile != "" {
+		if _, err := fmt.Fprintf(out, "log-file: %s\n", status.LogFile); err != nil {
+			return err
+		}
+	}
+	if status.Message != "" {
+		if _, err := fmt.Fprintf(out, "message: %s\n", status.Message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printTunnelStatus(out io.Writer, cfg config.Config) error {
+	if cfg.Tunnel.Enabled {
+		if _, err := fmt.Fprintln(out, "tunnel: enabled"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(out, "tunnel-remote: %s:%s\n", cfg.Tunnel.RemoteHost, cfg.Tunnel.RemotePort); err != nil {
+			return err
+		}
+		return nil
+	}
+	_, err := fmt.Fprintln(out, "tunnel: disabled")
+	return err
 }
 
 func newCompletionCommand(root *cobra.Command) *cobra.Command {
