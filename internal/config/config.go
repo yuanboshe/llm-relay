@@ -10,7 +10,8 @@ import (
 
 const (
 	DefaultDirName    = ".llmrelay"
-	DefaultConfigName = "config.toml"
+	DefaultConfigName = "config"
+	LegacyConfigName  = "config.toml"
 	DefaultStoreName  = "tokens.json"
 )
 
@@ -29,10 +30,21 @@ type Upstream struct {
 	APIKey       string
 }
 
+// Tunnel describes an optional SSH reverse tunnel managed by llmrelay.
+type Tunnel struct {
+	Enabled    bool
+	SSHHost    string
+	SSHUser    string
+	SSHPort    string
+	RemoteHost string
+	RemotePort string
+}
+
 // Config contains relay runtime settings.
 type Config struct {
 	ListenAddr string
 	Upstream   Upstream
+	Tunnel     Tunnel
 }
 
 // DefaultPaths returns the standard configuration paths under the user home directory.
@@ -63,6 +75,12 @@ func DefaultConfig() Config {
 	return Config{
 		ListenAddr: "127.0.0.1:18080",
 		Upstream:   Upstream{},
+		Tunnel: Tunnel{
+			Enabled:    false,
+			SSHPort:    "22",
+			RemoteHost: "127.0.0.1",
+			RemotePort: "18080",
+		},
 	}
 }
 
@@ -95,6 +113,10 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			legacyPath := filepath.Join(filepath.Dir(path), LegacyConfigName)
+			if _, legacyErr := os.Stat(legacyPath); legacyErr == nil {
+				return Config{}, fmt.Errorf("config not found: %s; legacy config.toml found at %s; run llmrelay init", path, legacyPath)
+			}
 			return Config{}, fmt.Errorf("config not found: %s; run llmrelay init", path)
 		}
 		return Config{}, err
@@ -112,22 +134,27 @@ func Load(path string) (Config, error) {
 			continue
 		}
 
-		key, value, ok := strings.Cut(line, "=")
+		key, rawValue, ok := strings.Cut(line, "=")
 		if !ok {
 			return Config{}, fmt.Errorf("invalid config line: %s", line)
 		}
 		key = strings.TrimSpace(key)
-		value, err := parseStringValue(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, err
-		}
+		rawValue = strings.TrimSpace(rawValue)
 
 		switch section {
 		case "":
 			if key == "listen_addr" {
+				value, err := parseStringValue(rawValue)
+				if err != nil {
+					return Config{}, err
+				}
 				cfg.ListenAddr = value
 			}
 		case "upstream":
+			value, err := parseStringValue(rawValue)
+			if err != nil {
+				return Config{}, err
+			}
 			switch key {
 			case "base_url":
 				cfg.Upstream.BaseURL = value
@@ -137,6 +164,45 @@ func Load(path string) (Config, error) {
 				cfg.Upstream.APIKeyEnv = value
 			case "api_key":
 				cfg.Upstream.APIKey = value
+			}
+		case "tunnel":
+			switch key {
+			case "enabled":
+				value, err := parseBoolValue(rawValue)
+				if err != nil {
+					return Config{}, err
+				}
+				cfg.Tunnel.Enabled = value
+			case "ssh_host":
+				value, err := parseStringValue(rawValue)
+				if err != nil {
+					return Config{}, err
+				}
+				cfg.Tunnel.SSHHost = value
+			case "ssh_user":
+				value, err := parseStringValue(rawValue)
+				if err != nil {
+					return Config{}, err
+				}
+				cfg.Tunnel.SSHUser = value
+			case "ssh_port":
+				value, err := parseStringValue(rawValue)
+				if err != nil {
+					return Config{}, err
+				}
+				cfg.Tunnel.SSHPort = value
+			case "remote_host":
+				value, err := parseStringValue(rawValue)
+				if err != nil {
+					return Config{}, err
+				}
+				cfg.Tunnel.RemoteHost = value
+			case "remote_port":
+				value, err := parseStringValue(rawValue)
+				if err != nil {
+					return Config{}, err
+				}
+				cfg.Tunnel.RemotePort = value
 			}
 		default:
 			return Config{}, fmt.Errorf("unknown config section: %s", section)
@@ -160,7 +226,15 @@ base_url = "%s"
 api_key_source = "%s"
 api_key_env = "%s"
 api_key = "%s"
-`, escape(cfg.ListenAddr), escape(cfg.Upstream.BaseURL), escape(cfg.Upstream.APIKeySource), escape(cfg.Upstream.APIKeyEnv), escape(cfg.Upstream.APIKey))
+
+[tunnel]
+enabled = %t
+ssh_host = "%s"
+ssh_user = "%s"
+ssh_port = "%s"
+remote_host = "%s"
+remote_port = "%s"
+`, escape(cfg.ListenAddr), escape(cfg.Upstream.BaseURL), escape(cfg.Upstream.APIKeySource), escape(cfg.Upstream.APIKeyEnv), escape(cfg.Upstream.APIKey), cfg.Tunnel.Enabled, escape(cfg.Tunnel.SSHHost), escape(cfg.Tunnel.SSHUser), escape(cfg.Tunnel.SSHPort), escape(cfg.Tunnel.RemoteHost), escape(cfg.Tunnel.RemotePort))
 }
 
 // FormatRedacted returns config.toml text with inline secrets hidden.
@@ -179,6 +253,17 @@ func parseStringValue(value string) (string, error) {
 	value = strings.ReplaceAll(value, `\"`, `"`)
 	value = strings.ReplaceAll(value, `\\`, `\`)
 	return value, nil
+}
+
+func parseBoolValue(value string) (bool, error) {
+	switch value {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, errors.New("only true or false boolean config values are supported")
+	}
 }
 
 func escape(value string) string {

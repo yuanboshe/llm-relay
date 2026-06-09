@@ -52,6 +52,12 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Upstream.BaseURL != "" {
 		t.Fatalf("Upstream.BaseURL = %q, want empty", cfg.Upstream.BaseURL)
 	}
+	if cfg.Tunnel.RemoteHost != "127.0.0.1" {
+		t.Fatalf("Tunnel.RemoteHost = %q, want default localhost", cfg.Tunnel.RemoteHost)
+	}
+	if cfg.Tunnel.RemotePort != "18080" {
+		t.Fatalf("Tunnel.RemotePort = %q, want default remote port", cfg.Tunnel.RemotePort)
+	}
 }
 
 func TestInitCreatesConfigAndTokenFiles(t *testing.T) {
@@ -78,6 +84,12 @@ func TestInitCreatesConfigAndTokenFiles(t *testing.T) {
 	if !strings.Contains(configText, "[upstream]") {
 		t.Fatalf("config = %q, want upstream section", configText)
 	}
+	if !strings.Contains(configText, "[tunnel]") {
+		t.Fatalf("config = %q, want tunnel section", configText)
+	}
+	if !strings.Contains(configText, `enabled = false`) {
+		t.Fatalf("config = %q, want disabled tunnel by default", configText)
+	}
 
 	tokenData, err := os.ReadFile(paths.TokenFile)
 	if err != nil {
@@ -85,6 +97,49 @@ func TestInitCreatesConfigAndTokenFiles(t *testing.T) {
 	}
 	if strings.TrimSpace(string(tokenData)) != "[]" {
 		t.Fatalf("tokens = %q, want empty json array", string(tokenData))
+	}
+}
+
+func TestDefaultConfigNameIsExtensionlessConfig(t *testing.T) {
+	if DefaultConfigName != "config" {
+		t.Fatalf("DefaultConfigName = %q, want config", DefaultConfigName)
+	}
+}
+
+func TestLoadParsesTunnelSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), DefaultConfigName)
+	text := `listen_addr = "0.0.0.0:18080"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+api_key_source = "env"
+api_key_env = "LLMRELAY_TEST_KEY"
+api_key = ""
+
+[tunnel]
+enabled = true
+ssh_host = "relay-host"
+ssh_user = "ubuntu"
+ssh_port = "22"
+remote_host = "127.0.0.1"
+remote_port = "18080"
+`
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.Tunnel.Enabled {
+		t.Fatal("Tunnel.Enabled = false, want true")
+	}
+	if cfg.Tunnel.SSHHost != "relay-host" {
+		t.Fatalf("Tunnel.SSHHost = %q, want relay-host", cfg.Tunnel.SSHHost)
+	}
+	if cfg.Tunnel.SSHUser != "ubuntu" {
+		t.Fatalf("Tunnel.SSHUser = %q, want ubuntu", cfg.Tunnel.SSHUser)
 	}
 }
 
