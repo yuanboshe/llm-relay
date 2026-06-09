@@ -2,10 +2,11 @@ package relay
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -48,7 +49,10 @@ func (l *Logger) Log(entry map[string]any) {
 		return
 	}
 	entry["ts"] = time.Now().UTC().Format(time.RFC3339Nano)
-	b, _ := json.Marshal(entry)
+	b, err := json.Marshal(entry)
+	if err != nil {
+		b = []byte(fmt.Sprintf(`{"level":"error","msg":"log_marshal_failed","error":%q}`, err.Error()))
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	_, _ = l.file.Write(append(b, '\n'))
@@ -197,16 +201,10 @@ func TailLogs(path string, maxLines int) ([]string, error) {
 
 func WaitForServer(addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	url := "http://" + addr + "/v1/models"
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Authorization", "******")
-		resp, err := http.DefaultClient.Do(req)
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
-			resp.Body.Close()
+			_ = conn.Close()
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)

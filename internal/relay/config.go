@@ -1,12 +1,10 @@
 package relay
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -143,15 +141,12 @@ func HashToken(token string) string {
 }
 
 func AddToken(cfg *Config, token string) {
-	id := fmt.Sprintf("tok_%d", time.Now().UnixNano())
-	rb := make([]byte, 4)
-	if _, err := rand.Read(rb); err == nil {
-		id = "tok_" + hex.EncodeToString(rb)
-	}
+	now := time.Now().UTC()
+	id := "tok_" + HashToken(token + now.Format(time.RFC3339Nano))[:12]
 	cfg.Tokens = append(cfg.Tokens, RelayToken{
 		ID:        id,
 		Hash:      HashToken(token),
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		CreatedAt: now.Format(time.RFC3339),
 	})
 }
 

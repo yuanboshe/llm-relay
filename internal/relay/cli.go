@@ -66,7 +66,7 @@ func runUpstream(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "set":
 		fs := flag.NewFlagSet("upstream set", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs.SetOutput(stderr)
 		provider := fs.String("provider", cfg.Upstream.Provider, "upstream provider (openai|anthropic|custom)")
 		baseURL := fs.String("base-url", cfg.Upstream.BaseURL, "upstream base URL")
 		apiKey := fs.String("api-key", cfg.Upstream.APIKey, "upstream API key")
@@ -154,7 +154,7 @@ func runServe(args []string, stderr io.Writer) int {
 		return 1
 	}
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(stderr)
 	addr := fs.String("addr", cfg.ListenAddr, "listen address")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -256,7 +256,7 @@ func runStatus(stdout io.Writer) int {
 
 func runLogs(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(stderr)
 	tail := fs.Int("tail", 50, "number of lines")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(stderr, err)
