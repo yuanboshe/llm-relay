@@ -41,6 +41,7 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 	}
 
 	root.AddCommand(
+		newInitCommand(),
 		newVersionCommand(),
 		newConfigCommand(),
 		newServeCommand(),
@@ -48,6 +49,30 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 	)
 
 	return root
+}
+
+func newInitCommand() *cobra.Command {
+	var force bool
+
+	initCmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize local configuration",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := config.DefaultPaths()
+			if err != nil {
+				return err
+			}
+			if err := config.Init(paths, force); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "initialized llmrelay config at %s\n", paths.ConfigFile)
+			return err
+		},
+	}
+	initCmd.Flags().BoolVar(&force, "force", false, "overwrite existing config")
+
+	return initCmd
 }
 
 func newVersionCommand() *cobra.Command {
@@ -78,6 +103,23 @@ func newConfigCommand() *cobra.Command {
 				return err
 			}
 			_, err = fmt.Fprintln(cmd.OutOrStdout(), paths.ConfigFile)
+			return err
+		},
+	})
+	configCmd.AddCommand(&cobra.Command{
+		Use:   "show",
+		Short: "Show local configuration",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := config.DefaultPaths()
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(paths.ConfigFile)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprint(cmd.OutOrStdout(), config.FormatRedacted(cfg))
 			return err
 		},
 	})
