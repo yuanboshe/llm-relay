@@ -155,9 +155,8 @@ func (s *Server) authenticate(header string) (tokenstore.Record, bool) {
 	if !ok || !strings.EqualFold(scheme, "Bearer") || !strings.HasPrefix(token, "llmr_") {
 		return tokenstore.Record{}, false
 	}
-	hash := tokenstore.HashToken(token)
 	for _, record := range s.tokens {
-		if record.TokenHash == hash {
+		if tokenstore.RecordMatchesToken(record, token) {
 			return record, true
 		}
 	}

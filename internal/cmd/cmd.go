@@ -432,7 +432,7 @@ func newTokenVerifyCommand() *cobra.Command {
 
 	verifyCmd := &cobra.Command{
 		Use:   "verify <key-id>",
-		Short: "Verify a relay token against local hash",
+		Short: "Verify a relay token against local store",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !fromStdin {
@@ -450,7 +450,7 @@ func newTokenVerifyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !tokenstore.VerifyToken(token, record.TokenHash) {
+			if !tokenstore.RecordMatchesToken(record, token) {
 				return fmt.Errorf("token is invalid")
 			}
 			_, err = fmt.Fprintln(cmd.OutOrStdout(), "token: valid")
@@ -535,6 +535,7 @@ func newTokenRotateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			record.Token = token
 			record.TokenHash = tokenstore.HashToken(token)
 			record.RotatedAt = time.Now().UTC().Format(time.RFC3339)
 			records[idx] = record

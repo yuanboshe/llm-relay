@@ -17,6 +17,7 @@ type Record struct {
 	KeyID     string `json:"key_id"`
 	Name      string `json:"name"`
 	Note      string `json:"note"`
+	Token     string `json:"token"`
 	TokenHash string `json:"token_hash"`
 	CreatedAt string `json:"created_at"`
 	RotatedAt string `json:"rotated_at"`
@@ -62,7 +63,7 @@ func (s *Store) Save(records []Record) error {
 	return os.WriteFile(s.path, append(data, '\n'), 0o600)
 }
 
-// GenerateToken creates a new plaintext relay token. Callers must display it once only.
+// GenerateToken creates a new plaintext relay token.
 func GenerateToken() (string, error) {
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
@@ -83,6 +84,7 @@ func NewRecord(keyID string, token string, now time.Time) Record {
 		KeyID:     keyID,
 		Name:      "",
 		Note:      "",
+		Token:     token,
 		TokenHash: HashToken(token),
 		CreatedAt: now.UTC().Format(time.RFC3339),
 		Enabled:   true,
@@ -100,6 +102,14 @@ func NewRecordWithMetadata(keyID string, token string, now time.Time, name strin
 // VerifyToken reports whether plaintext token matches the persisted hash.
 func VerifyToken(token string, tokenHash string) bool {
 	return HashToken(token) == tokenHash
+}
+
+// RecordMatchesToken reports whether plaintext token matches a stored record.
+func RecordMatchesToken(record Record, token string) bool {
+	if record.Token != "" {
+		return record.Token == token
+	}
+	return VerifyToken(token, record.TokenHash)
 }
 
 // Find returns the index and record for keyID.

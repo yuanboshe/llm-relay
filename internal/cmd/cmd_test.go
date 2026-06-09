@@ -289,7 +289,7 @@ func TestRunSetupConfiguresUpstreamAndCreatesToken(t *testing.T) {
 		t.Fatalf("setup output leaked upstream key: %q", out)
 	}
 	if !strings.Contains(out, "relay token: llmr_") {
-		t.Fatalf("setup output = %q, want one-time relay token", out)
+		t.Fatalf("setup output = %q, want relay token", out)
 	}
 }
 
@@ -327,7 +327,7 @@ api_key = "%s"
 	}
 }
 
-func TestRunTokenCreateStoresOnlyHash(t *testing.T) {
+func TestRunTokenCreateStoresPlaintextToken(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
 	setInstallTestHome(t)
@@ -346,15 +346,15 @@ func TestRunTokenCreateStoresOnlyHash(t *testing.T) {
 
 	out := stdout.String()
 	if !strings.Contains(out, "llmr_") {
-		t.Fatalf("token create output = %q, want one-time relay token", out)
+		t.Fatalf("token create output = %q, want relay token", out)
 	}
 	tokenFile := filepath.Join(home, "tokens.json")
 	data, err := os.ReadFile(tokenFile)
 	if err != nil {
 		t.Fatalf("read token store: %v", err)
 	}
-	if strings.Contains(string(data), "llmr_") {
-		t.Fatalf("token store leaked plaintext token: %q", string(data))
+	if !strings.Contains(string(data), `"token": "llmr_`) {
+		t.Fatalf("token store = %q, want plaintext token", string(data))
 	}
 	if !strings.Contains(string(data), "sha256:") {
 		t.Fatalf("token store = %q, want sha256 hash", string(data))
@@ -400,8 +400,17 @@ func TestRunTokenLifecycle(t *testing.T) {
 	if err := Run([]string{"token", "rotate", "local"}, &stdout, &stderr); err != nil {
 		t.Fatalf("Run(token rotate) returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "llmr_") {
-		t.Fatalf("rotate output = %q, want one-time relay token", stdout.String())
+	rotatedToken := stdout.String()
+	if !strings.Contains(rotatedToken, "llmr_") {
+		t.Fatalf("rotate output = %q, want relay token", stdout.String())
+	}
+	tokenData, err := os.ReadFile(filepath.Join(home, "tokens.json"))
+	if err != nil {
+		t.Fatalf("read token store: %v", err)
+	}
+	rotatedToken = strings.TrimSpace(strings.TrimPrefix(strings.Split(rotatedToken, "relay token: ")[1], "\n"))
+	if !strings.Contains(string(tokenData), rotatedToken) {
+		t.Fatalf("token store = %q, want rotated plaintext token", string(tokenData))
 	}
 
 	stdout.Reset()

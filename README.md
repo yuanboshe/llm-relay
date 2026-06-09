@@ -54,7 +54,7 @@ printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay config set-key --stdin
 llmrelay config test --path /v1/models
 ```
 
-Create additional relay tokens as needed and keep the plaintext values. A token is only printed once:
+Create additional relay tokens as needed:
 
 ```sh
 llmrelay token create local --name "Local client"
@@ -98,7 +98,24 @@ remote_host = "127.0.0.1"
 remote_port = "18080"
 ```
 
-`tokens.json` is managed by `llmrelay token ...` commands. Relay tokens are stored as SHA-256 hashes, not plaintext. Process output is appended to `~/.llmrelay/llmrelay.log`; non-macOS background runs also write `~/.llmrelay/llmrelay.pid`.
+`tokens.json` is managed by `llmrelay token ...` commands. Relay tokens are stored in plaintext in that local file, with SHA-256 hashes kept for compatibility and verification. Keep this file private. Process output is appended to `~/.llmrelay/llmrelay.log`; non-macOS background runs also write `~/.llmrelay/llmrelay.pid`.
+
+Example token store:
+
+```json
+[
+  {
+    "key_id": "local",
+    "name": "Local client",
+    "note": "",
+    "token": "llmr_example",
+    "token_hash": "sha256:<hex>",
+    "created_at": "2026-06-10T00:00:00Z",
+    "rotated_at": "",
+    "enabled": true
+  }
+]
+```
 
 ## LAN Entry
 

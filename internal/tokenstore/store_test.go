@@ -28,6 +28,7 @@ func TestSaveAndLoad(t *testing.T) {
 			KeyID:     "example-id",
 			Name:      "example name",
 			Note:      "example note",
+			Token:     "llmr_example",
 			TokenHash: "sha256:example",
 			CreatedAt: now.Format(time.RFC3339),
 			Enabled:   true,
@@ -44,7 +45,7 @@ func TestSaveAndLoad(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("records length = %d, want 1", len(got))
 	}
-	if got[0].KeyID != want[0].KeyID || got[0].TokenHash != want[0].TokenHash || !got[0].Enabled {
+	if got[0].KeyID != want[0].KeyID || got[0].Token != want[0].Token || got[0].TokenHash != want[0].TokenHash || !got[0].Enabled {
 		t.Fatalf("record = %+v, want %+v", got[0], want[0])
 	}
 }
@@ -72,6 +73,9 @@ func TestNewRecordWithMetadataAndVerifyToken(t *testing.T) {
 	token := "llmr_test_token"
 
 	record := NewRecordWithMetadata("example-id", token, now, "example name", "example note")
+	if record.Token != token {
+		t.Fatalf("Token = %q, want plaintext token", record.Token)
+	}
 	if record.Name != "example name" {
 		t.Fatalf("Name = %q, want example name", record.Name)
 	}
@@ -81,7 +85,25 @@ func TestNewRecordWithMetadataAndVerifyToken(t *testing.T) {
 	if !VerifyToken(token, record.TokenHash) {
 		t.Fatalf("VerifyToken returned false for matching token")
 	}
+	if !RecordMatchesToken(record, token) {
+		t.Fatalf("RecordMatchesToken returned false for matching token")
+	}
 	if VerifyToken("different-token", record.TokenHash) {
 		t.Fatalf("VerifyToken returned true for non-matching token")
+	}
+	if RecordMatchesToken(record, "different-token") {
+		t.Fatalf("RecordMatchesToken returned true for non-matching token")
+	}
+}
+
+func TestRecordMatchesTokenSupportsHashOnlyRecords(t *testing.T) {
+	token := "llmr_legacy_token"
+	record := Record{
+		KeyID:     "legacy",
+		TokenHash: HashToken(token),
+	}
+
+	if !RecordMatchesToken(record, token) {
+		t.Fatal("RecordMatchesToken returned false for hash-only legacy record")
 	}
 }
