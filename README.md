@@ -1,8 +1,8 @@
 # llm-relay
 
-`llm-relay` is an early Go skeleton for a local or server-side LLM API relay. Its command-line binary is `llmrelay`.
+`llm-relay` is a Go CLI for running a local LLM API relay. Its command-line binary is `llmrelay`.
 
-The current repository contains foundational local configuration, relay token management, single-upstream configuration, diagnostic commands, and local install support. It does not yet implement a production relay, request forwarding, usage tracking, or full OpenAI-compatible / Anthropic-compatible API behavior.
+The current repository contains local configuration, relay token management, single-upstream configuration, HTTP request forwarding, optional SSH reverse tunnel support, diagnostic commands, and local install support. It does not yet implement background process management, usage tracking, quotas, or rate limits.
 
 ## Current Commands
 
@@ -25,7 +25,112 @@ go run ./cmd/llmrelay serve
 go run ./cmd/llmrelay completion bash
 ```
 
-The `serve` command is still a placeholder for the future HTTP relay stage.
+## Minimal Flow
+
+Initialize local files:
+
+```sh
+llmrelay init
+```
+
+Configure one upstream:
+
+```sh
+llmrelay upstream set-url https://api.example.test/v1
+printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay upstream set-key --stdin
+llmrelay upstream test --path /v1/models
+```
+
+Create a relay token and keep the plaintext value. The token is only printed once:
+
+```sh
+llmrelay token create local --name "Local client"
+```
+
+Run the relay:
+
+```sh
+llmrelay serve
+```
+
+## Configuration
+
+The default configuration file is `~/.llmrelay/config.toml`. It uses TOML syntax:
+
+```toml
+listen_addr = "0.0.0.0:18080"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+api_key_source = "inline"
+api_key_env = ""
+api_key = ""
+
+[tunnel]
+enabled = false
+ssh_host = ""
+ssh_user = ""
+ssh_port = "22"
+remote_host = "127.0.0.1"
+remote_port = "18080"
+```
+
+`tokens.json` is managed by `llmrelay token ...` commands. Relay tokens are stored as SHA-256 hashes, not plaintext.
+
+## LAN Entry
+
+For another machine on the same LAN, bind the relay to a LAN-reachable address:
+
+```toml
+listen_addr = "0.0.0.0:18080"
+```
+
+The LAN client can then use:
+
+```text
+base_url = http://relay-host-lan-ip:18080
+api_key = llmr_xxx
+```
+
+## Remote Server Entry
+
+`llmrelay` can also ask OpenSSH to create a reverse tunnel to a remote server. Enable the tunnel in `config.toml`:
+
+```toml
+[tunnel]
+enabled = true
+ssh_host = "relay-server"
+ssh_user = "ubuntu"
+ssh_port = "22"
+remote_host = "127.0.0.1"
+remote_port = "18080"
+```
+
+The generated OpenSSH command is equivalent to:
+
+```sh
+ssh -N -T -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -p 22 \
+  -R 127.0.0.1:18080:127.0.0.1:18080 \
+  ubuntu@relay-server
+```
+
+On the remote server, a reverse proxy such as Caddy can expose HTTPS:
+
+```caddy
+llm.example.test {
+    reverse_proxy 127.0.0.1:18080
+}
+```
+
+The remote client can then use:
+
+```text
+base_url = https://llm.example.test
+api_key = llmr_xxx
+```
 
 ## Development
 
@@ -49,7 +154,7 @@ make install
 
 ## Planned Direction
 
-Future work is expected to add request forwarding, streaming responses, access logging, local process management, and usage tracking.
+Future work is expected to add access logging, local process management, usage tracking, quotas, and rate limits.
 
 ## Security
 
