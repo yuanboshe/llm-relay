@@ -26,6 +26,8 @@ func TestSaveAndLoad(t *testing.T) {
 	want := []Record{
 		{
 			KeyID:     "example-id",
+			Name:      "example name",
+			Note:      "example note",
 			TokenHash: "sha256:example",
 			CreatedAt: now.Format(time.RFC3339),
 			Enabled:   true,
@@ -62,5 +64,24 @@ func TestGenerateTokenAndHashToken(t *testing.T) {
 	}
 	if hash == token {
 		t.Fatal("hash equals plaintext token")
+	}
+}
+
+func TestNewRecordWithMetadataAndVerifyToken(t *testing.T) {
+	now := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	token := "llmr_test_token"
+
+	record := NewRecordWithMetadata("example-id", token, now, "example name", "example note")
+	if record.Name != "example name" {
+		t.Fatalf("Name = %q, want example name", record.Name)
+	}
+	if record.Note != "example note" {
+		t.Fatalf("Note = %q, want example note", record.Note)
+	}
+	if !VerifyToken(token, record.TokenHash) {
+		t.Fatalf("VerifyToken returned false for matching token")
+	}
+	if VerifyToken("different-token", record.TokenHash) {
+		t.Fatalf("VerifyToken returned true for non-matching token")
 	}
 }

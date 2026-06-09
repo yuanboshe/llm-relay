@@ -15,6 +15,8 @@ import (
 // Record describes a locally managed relay credential entry.
 type Record struct {
 	KeyID     string `json:"key_id"`
+	Name      string `json:"name"`
+	Note      string `json:"note"`
 	TokenHash string `json:"token_hash"`
 	CreatedAt string `json:"created_at"`
 	RotatedAt string `json:"rotated_at"`
@@ -79,10 +81,25 @@ func HashToken(token string) string {
 func NewRecord(keyID string, token string, now time.Time) Record {
 	return Record{
 		KeyID:     keyID,
+		Name:      "",
+		Note:      "",
 		TokenHash: HashToken(token),
 		CreatedAt: now.UTC().Format(time.RFC3339),
 		Enabled:   true,
 	}
+}
+
+// NewRecordWithMetadata creates a record with optional human-readable metadata.
+func NewRecordWithMetadata(keyID string, token string, now time.Time, name string, note string) Record {
+	record := NewRecord(keyID, token, now)
+	record.Name = name
+	record.Note = note
+	return record
+}
+
+// VerifyToken reports whether plaintext token matches the persisted hash.
+func VerifyToken(token string, tokenHash string) bool {
+	return HashToken(token) == tokenHash
 }
 
 // Find returns the index and record for keyID.

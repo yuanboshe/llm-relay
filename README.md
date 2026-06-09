@@ -2,7 +2,7 @@
 
 `llm-relay` is an early Go skeleton for a local or server-side LLM API relay. Its command-line binary is `llmrelay`.
 
-The current repository contains foundational local configuration, relay token management, and single-upstream configuration commands. It does not yet implement a production relay, request forwarding, usage tracking, or full OpenAI-compatible / Anthropic-compatible API behavior.
+The current repository contains foundational local configuration, relay token management, single-upstream configuration, diagnostic commands, and local install support. It does not yet implement a production relay, request forwarding, usage tracking, or full OpenAI-compatible / Anthropic-compatible API behavior.
 
 ## Current Commands
 
@@ -11,15 +11,21 @@ go run ./cmd/llmrelay version
 go run ./cmd/llmrelay init
 go run ./cmd/llmrelay config path
 go run ./cmd/llmrelay config show
+go run ./cmd/llmrelay config validate
 go run ./cmd/llmrelay token create local
 go run ./cmd/llmrelay token list
+go run ./cmd/llmrelay token inspect local
+go run ./cmd/llmrelay token verify local --stdin
 go run ./cmd/llmrelay upstream set-url https://api.example.test/v1
+go run ./cmd/llmrelay upstream set-key --stdin
+go run ./cmd/llmrelay upstream test --path /v1/models
+go run ./cmd/llmrelay doctor
 go run ./cmd/llmrelay upstream show
 go run ./cmd/llmrelay serve
 go run ./cmd/llmrelay completion bash
 ```
 
-The `serve` command currently prints the planned listener and route surface instead of starting a real proxy.
+The `serve` command is still a placeholder for the future HTTP relay stage.
 
 ## Development
 
@@ -33,6 +39,12 @@ Or run Go tests directly:
 
 ```sh
 go test ./...
+```
+
+Install the CLI locally:
+
+```sh
+make install
 ```
 
 ## Planned Direction

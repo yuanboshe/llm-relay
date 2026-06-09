@@ -238,6 +238,94 @@ func TestRunTokenLifecycle(t *testing.T) {
 	}
 }
 
+func TestRunTokenMetadataAndVerify(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	nameValue := strings.Join([]string{"example", "token", "name"}, " ")
+	noteValue := strings.Join([]string{"example", "token", "note"}, " ")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	for _, args := range [][]string{
+		{"init"},
+		{"token", "create", "local", "--name", nameValue, "--note", noteValue},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "relay token:") {
+		t.Fatalf("create output = %q, want relay token", out)
+	}
+	lines := strings.Split(out, "\n")
+	var tokenValue string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "relay token: ") {
+			tokenValue = strings.TrimSpace(strings.TrimPrefix(line, "relay token: "))
+		}
+	}
+	if tokenValue == "" {
+		t.Fatalf("create output = %q, want token value", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"token", "inspect", "local"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token inspect) returned error: %v", err)
+	}
+	inspectOut := stdout.String()
+	for _, want := range []string{
+		"key-id: local",
+		"name: " + nameValue,
+		"note: " + noteValue,
+		"enabled: true",
+		"token-hash-prefix: sha256:",
+	} {
+		if !strings.Contains(inspectOut, want) {
+			t.Fatalf("inspect output = %q, want %q", inspectOut, want)
+		}
+	}
+	if strings.Contains(inspectOut, tokenValue) {
+		t.Fatalf("inspect leaked token: %q", inspectOut)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"token", "list"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token list) returned error: %v", err)
+	}
+	listOut := stdout.String()
+	for _, want := range []string{
+		"key-id",
+		"name",
+		"note",
+		"enabled",
+		"local",
+		nameValue,
+		noteValue,
+	} {
+		if !strings.Contains(listOut, want) {
+			t.Fatalf("list output = %q, want %q", listOut, want)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := RunWithIO([]string{"token", "verify", "local", "--stdin"}, strings.NewReader(tokenValue+"\n"), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token verify --stdin) returned error: %v", err)
+	}
+	verifyOut := stdout.String()
+	if !strings.Contains(verifyOut, "token: valid") {
+		t.Fatalf("verify output = %q, want valid", verifyOut)
+	}
+	if strings.Contains(verifyOut, tokenValue) {
+		t.Fatalf("verify leaked token: %q", verifyOut)
+	}
+}
+
 func TestRunUpstreamSetURLAndShow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
@@ -297,8 +385,10 @@ func TestRunUpstreamTestUsesKeyWithoutPrintingIt(t *testing.T) {
 	t.Setenv("LLMRELAY_HOME", home)
 	keyValue := strings.Join([]string{"runtime", "test", "key"}, "-")
 	var seenAuth string
+	var seenPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenAuth = r.Header.Get("Authorization")
+		seenPath = r.URL.Path
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -324,12 +414,15 @@ func TestRunUpstreamTestUsesKeyWithoutPrintingIt(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Run([]string{"upstream", "test"}, &stdout, &stderr); err != nil {
+	if err := Run([]string{"upstream", "test", "--path", "/v1/models"}, &stdout, &stderr); err != nil {
 		t.Fatalf("Run(upstream test) returned error: %v", err)
 	}
 
 	if seenAuth != "Bearer "+keyValue {
 		t.Fatalf("Authorization = %q, want bearer key", seenAuth)
+	}
+	if seenPath != "/v1/models" {
+		t.Fatalf("path = %q, want /v1/models", seenPath)
 	}
 	out := stdout.String()
 	if strings.Contains(out, keyValue) {
@@ -337,5 +430,150 @@ func TestRunUpstreamTestUsesKeyWithoutPrintingIt(t *testing.T) {
 	}
 	if !strings.Contains(out, "status: 200") {
 		t.Fatalf("upstream test output = %q, want status", out)
+	}
+}
+
+func TestRunConfigValidateReportsMissingConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := Run([]string{"config", "validate"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(config validate) returned nil error, want missing config error")
+	}
+	if !strings.Contains(err.Error(), "run llmrelay init") {
+		t.Fatalf("error = %q, want init hint", err.Error())
+	}
+}
+
+func TestRunConfigValidateChecksEnvKeyReference(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	envName := "LLMRELAY_TEST_MISSING_KEY"
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	for _, args := range [][]string{
+		{"init"},
+		{"upstream", "set-url", "https://api.example.test/v1"},
+		{"upstream", "set-key", "--env", envName},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err := Run([]string{"config", "validate"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(config validate) returned nil error, want env key error")
+	}
+	if !strings.Contains(err.Error(), envName) {
+		t.Fatalf("error = %q, want env name", err.Error())
+	}
+}
+
+func TestRunConfigValidateSucceedsForInlineKeyWithoutPrintingIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	keyValue := strings.Join([]string{"local", "inline", "value"}, "-")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	for _, args := range [][]string{
+		{"init"},
+		{"upstream", "set-url", "https://api.example.test/v1"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := RunWithIO([]string{"upstream", "set-key", "--stdin"}, strings.NewReader(keyValue+"\n"), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(upstream set-key --stdin) returned error: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"config", "validate"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(config validate) returned error: %v", err)
+	}
+	out := stdout.String()
+	if strings.Contains(out, keyValue) {
+		t.Fatalf("config validate leaked key: %q", out)
+	}
+	if !strings.Contains(out, "config: ok") {
+		t.Fatalf("config validate output = %q, want ok", out)
+	}
+}
+
+func TestRunDoctorReportsUninitializedHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := Run([]string{"doctor"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(doctor) returned nil error, want diagnostic failure")
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "config.toml: missing") {
+		t.Fatalf("doctor output = %q, want missing config", out)
+	}
+	if !strings.Contains(out, "tokens.json: missing") {
+		t.Fatalf("doctor output = %q, want missing tokens", out)
+	}
+}
+
+func TestRunDoctorReportsConfiguredEnvironment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	envName := "LLMRELAY_TEST_DOCTOR_KEY"
+	keyValue := strings.Join([]string{"doctor", "runtime", "value"}, "-")
+	t.Setenv(envName, keyValue)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	for _, args := range [][]string{
+		{"init"},
+		{"upstream", "set-url", "https://api.example.test/v1"},
+		{"upstream", "set-key", "--env", envName},
+		{"token", "create", "local"},
+		{"token", "disable", "local"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"doctor"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(doctor) returned error: %v", err)
+	}
+	out := stdout.String()
+	if strings.Contains(out, keyValue) {
+		t.Fatalf("doctor leaked key: %q", out)
+	}
+	for _, want := range []string{
+		"config.toml: ok",
+		"tokens.json: ok",
+		"upstream key: ok",
+		"tokens: 1 total, 1 disabled",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want %q", out, want)
+		}
 	}
 }
