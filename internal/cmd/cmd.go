@@ -1,79 +1,146 @@
 package cmd
 
 import (
-	"errors"
-	"flag"
 	"fmt"
 	"io"
+	"os"
 
+	"github.com/spf13/cobra"
 	"github.com/yuanboshe/llm-relay/internal/config"
 	"github.com/yuanboshe/llm-relay/internal/relay"
 )
 
 const version = "dev"
 
-// Run executes the llm-relay CLI.
+// Run executes the llmrelay CLI.
 func Run(args []string, stdout io.Writer, stderr io.Writer) error {
-	if len(args) == 0 {
-		printUsage(stderr)
-		return nil
-	}
-
-	switch args[0] {
-	case "version":
-		_, err := fmt.Fprintln(stdout, version)
-		return err
-	case "config":
-		return runConfig(args[1:], stdout, stderr)
-	case "serve":
-		return runServe(args[1:], stdout)
-	case "help", "-h", "--help":
-		printUsage(stdout)
-		return nil
-	default:
-		printUsage(stderr)
-		return fmt.Errorf("unknown command %q", args[0])
-	}
+	return RunWithIO(args, os.Stdin, stdout, stderr)
 }
 
-func runConfig(args []string, stdout io.Writer, stderr io.Writer) error {
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: llm-relay config path")
-		return errors.New("missing config subcommand")
+// RunWithIO executes the llmrelay CLI with explicit streams for tests.
+func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+	root := NewRootCommand(stdin)
+	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	if err := root.Execute(); err != nil {
+		root.SetOut(stderr)
+		_ = root.Usage()
+		return err
+	}
+	return nil
+}
+
+// NewRootCommand creates a fresh Cobra command tree.
+func NewRootCommand(stdin io.Reader) *cobra.Command {
+	root := &cobra.Command{
+		Use:           "llmrelay",
+		Short:         "Local LLM API relay",
+		SilenceErrors: true,
+		SilenceUsage:  false,
 	}
 
-	switch args[0] {
-	case "path":
-		paths, err := config.DefaultPaths()
-		if err != nil {
+	root.AddCommand(
+		newVersionCommand(),
+		newConfigCommand(),
+		newServeCommand(),
+		newCompletionCommand(root),
+	)
+
+	return root
+}
+
+func newVersionCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print version",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), version)
 			return err
-		}
-		_, err = fmt.Fprintln(stdout, paths.ConfigFile)
-		return err
-	default:
-		return fmt.Errorf("unknown config subcommand %q", args[0])
+		},
 	}
 }
 
-func runServe(args []string, stdout io.Writer) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(stdout)
-
-	addr := fs.String("addr", "127.0.0.1:8080", "HTTP listen address")
-	if err := fs.Parse(args); err != nil {
-		return err
+func newConfigCommand() *cobra.Command {
+	configCmd := &cobra.Command{
+		Use:   "config",
+		Short: "Manage local configuration",
 	}
 
-	server := relay.NewServer(*addr)
-	_, err := fmt.Fprintf(stdout, "llm-relay server would listen on %s with routes %v\n", server.Addr(), server.Routes())
-	return err
+	configCmd.AddCommand(&cobra.Command{
+		Use:   "path",
+		Short: "Print default config path",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := config.DefaultPaths()
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), paths.ConfigFile)
+			return err
+		},
+	})
+
+	return configCmd
 }
 
-func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: llm-relay <command>")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "commands:")
-	fmt.Fprintln(w, "  version       print version")
-	fmt.Fprintln(w, "  config path   print default config path")
-	fmt.Fprintln(w, "  serve         start relay server")
+func newServeCommand() *cobra.Command {
+	var addr string
+
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start relay server",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			server := relay.NewServer(addr)
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "llmrelay server would listen on %s with routes %v\n", server.Addr(), server.Routes())
+			return err
+		},
+	}
+	serveCmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "HTTP listen address")
+
+	return serveCmd
+}
+
+func newCompletionCommand(root *cobra.Command) *cobra.Command {
+	completionCmd := &cobra.Command{
+		Use:   "completion",
+		Short: "Generate shell completion scripts",
+	}
+
+	completionCmd.AddCommand(&cobra.Command{
+		Use:   "bash",
+		Short: "Generate bash completion script",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return root.GenBashCompletion(cmd.OutOrStdout())
+		},
+	})
+	completionCmd.AddCommand(&cobra.Command{
+		Use:   "zsh",
+		Short: "Generate zsh completion script",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return root.GenZshCompletion(cmd.OutOrStdout())
+		},
+	})
+	completionCmd.AddCommand(&cobra.Command{
+		Use:   "fish",
+		Short: "Generate fish completion script",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return root.GenFishCompletion(cmd.OutOrStdout(), true)
+		},
+	})
+	completionCmd.AddCommand(&cobra.Command{
+		Use:   "powershell",
+		Short: "Generate PowerShell completion script",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return root.GenPowerShellCompletion(cmd.OutOrStdout())
+		},
+	})
+
+	return completionCmd
 }
