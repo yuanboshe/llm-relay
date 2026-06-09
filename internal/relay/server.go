@@ -72,7 +72,7 @@ func NewRelayServer(cfg Config, logger *Logger) (*RelayServer, error) {
 	}
 	return &RelayServer{
 		cfg:      cfg,
-		client:   &http.Client{},
+		client:   &http.Client{Timeout: 120 * time.Second},
 		upstream: base,
 		logger:   logger,
 	}, nil

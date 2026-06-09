@@ -17,7 +17,9 @@ func TestAddTokenStoresHashOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := "llmr_test_plain_token"
-	AddToken(&cfg, plain)
+	if err := AddToken(&cfg, plain); err != nil {
+		t.Fatal(err)
+	}
 	if err := SaveConfig(cfg); err != nil {
 		t.Fatal(err)
 	}

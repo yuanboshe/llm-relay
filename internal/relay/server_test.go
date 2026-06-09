@@ -21,7 +21,9 @@ func TestRelayReplacesAuthorizationHeader(t *testing.T) {
 	cfg.Upstream.APIKey = "real-upstream-key"
 	cfg.Tokens = nil
 	plain := "llmr_client_abc"
-	AddToken(&cfg, plain)
+	if err := AddToken(&cfg, plain); err != nil {
+		t.Fatal(err)
+	}
 
 	srv, err := NewRelayServer(cfg, nil)
 	if err != nil {

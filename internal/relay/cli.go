@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 func Run(args []string, stdout, stderr io.Writer) int {
@@ -114,7 +115,10 @@ func runToken(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		AddToken(&cfg, token)
+		if err := AddToken(&cfg, token); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 		if err := SaveConfig(cfg); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -218,6 +222,11 @@ func runStart(stdout, stderr io.Writer) int {
 	cmd.Stdout = f
 	cmd.Stderr = f
 	if err := cmd.Start(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := WaitForServer(cfg.ListenAddr, 3*time.Second); err != nil {
+		_ = cmd.Process.Kill()
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
