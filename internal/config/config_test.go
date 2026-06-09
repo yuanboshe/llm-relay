@@ -100,9 +100,9 @@ func TestInitCreatesConfigAndTokenFiles(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigNameIsExtensionlessConfig(t *testing.T) {
-	if DefaultConfigName != "config" {
-		t.Fatalf("DefaultConfigName = %q, want config", DefaultConfigName)
+func TestDefaultConfigNameUsesTOMLSuffix(t *testing.T) {
+	if DefaultConfigName != "config.toml" {
+		t.Fatalf("DefaultConfigName = %q, want config.toml", DefaultConfigName)
 	}
 }
 

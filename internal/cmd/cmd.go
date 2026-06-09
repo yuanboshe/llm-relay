@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -812,12 +811,8 @@ func newDoctorCommand() *cobra.Command {
 				_, _ = fmt.Fprintln(out, "LLMRELAY_HOME: not set")
 			}
 
-			if err := reportPathStatus(out, "config", paths.ConfigFile); err != nil {
+			if err := reportPathStatus(out, "config.toml", paths.ConfigFile); err != nil {
 				failed = true
-			}
-			legacyConfigPath := filepath.Join(paths.Dir, config.LegacyConfigName)
-			if _, err := os.Stat(legacyConfigPath); err == nil {
-				_, _ = fmt.Fprintf(out, "legacy config.toml: found (%s)\n", legacyConfigPath)
 			}
 			if err := reportPathStatus(out, "tokens.json", paths.TokenFile); err != nil {
 				failed = true

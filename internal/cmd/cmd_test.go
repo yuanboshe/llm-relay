@@ -104,13 +104,9 @@ func TestRunInitCreatesConfigInEnvHome(t *testing.T) {
 		t.Fatalf("Run(init) returned error: %v", err)
 	}
 
-	configPath := filepath.Join(home, "config")
+	configPath := filepath.Join(home, "config.toml")
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("config file not created: %v", err)
-	}
-	oldConfigPath := filepath.Join(home, "config.toml")
-	if _, err := os.Stat(oldConfigPath); !os.IsNotExist(err) {
-		t.Fatalf("old config.toml exists or stat failed: %v", err)
 	}
 	tokenPath := filepath.Join(home, "tokens.json")
 	if _, err := os.Stat(tokenPath); err != nil {
@@ -133,7 +129,7 @@ api_key_source = "inline"
 api_key_env = ""
 api_key = "%s"
 `, keyValue)
-	if err := os.WriteFile(filepath.Join(home, "config"), []byte(configText), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -530,29 +526,11 @@ func TestRunDoctorReportsUninitializedHome(t *testing.T) {
 		t.Fatal("Run(doctor) returned nil error, want diagnostic failure")
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "config: missing") {
+	if !strings.Contains(out, "config.toml: missing") {
 		t.Fatalf("doctor output = %q, want missing config", out)
 	}
 	if !strings.Contains(out, "tokens.json: missing") {
 		t.Fatalf("doctor output = %q, want missing tokens", out)
-	}
-}
-
-func TestRunDoctorReportsLegacyConfigToml(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("LLMRELAY_HOME", home)
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("legacy"), 0o600); err != nil {
-		t.Fatalf("write legacy config: %v", err)
-	}
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	err := Run([]string{"doctor"}, &stdout, &stderr)
-	if err == nil {
-		t.Fatal("Run(doctor) returned nil error, want diagnostic failure")
-	}
-	if !strings.Contains(stdout.String(), "legacy config.toml: found") {
-		t.Fatalf("doctor output = %q, want legacy config warning", stdout.String())
 	}
 }
 
@@ -589,8 +567,9 @@ func TestRunDoctorReportsConfiguredEnvironment(t *testing.T) {
 		t.Fatalf("doctor leaked key: %q", out)
 	}
 	for _, want := range []string{
-		"config: ok",
+		"config.toml: ok",
 		"tokens.json: ok",
+		"config: ok",
 		"tunnel: disabled",
 		"upstream key: ok",
 		"tokens: 1 total, 1 disabled",

@@ -10,8 +10,7 @@ import (
 
 const (
 	DefaultDirName    = ".llmrelay"
-	DefaultConfigName = "config"
-	LegacyConfigName  = "config.toml"
+	DefaultConfigName = "config.toml"
 	DefaultStoreName  = "tokens.json"
 )
 
@@ -113,10 +112,6 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			legacyPath := filepath.Join(filepath.Dir(path), LegacyConfigName)
-			if _, legacyErr := os.Stat(legacyPath); legacyErr == nil {
-				return Config{}, fmt.Errorf("config not found: %s; legacy config.toml found at %s; run llmrelay init", path, legacyPath)
-			}
 			return Config{}, fmt.Errorf("config not found: %s; run llmrelay init", path)
 		}
 		return Config{}, err
