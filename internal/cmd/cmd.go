@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/yuanboshe/llm-relay/internal/config"
 	"github.com/yuanboshe/llm-relay/internal/relay"
+	"github.com/yuanboshe/llm-relay/internal/tokenstore"
 )
 
 const version = "dev"
@@ -44,11 +46,202 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 		newInitCommand(),
 		newVersionCommand(),
 		newConfigCommand(),
+		newTokenCommand(),
 		newServeCommand(),
 		newCompletionCommand(root),
 	)
 
 	return root
+}
+
+func newTokenCommand() *cobra.Command {
+	tokenCmd := &cobra.Command{
+		Use:   "token",
+		Short: "Manage relay tokens",
+	}
+
+	tokenCmd.AddCommand(
+		newTokenCreateCommand(),
+		newTokenListCommand(),
+		newTokenInspectCommand(),
+		newTokenEnableCommand(true),
+		newTokenEnableCommand(false),
+		newTokenDeleteCommand(),
+		newTokenRotateCommand(),
+	)
+
+	return tokenCmd
+}
+
+func newTokenCreateCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "create <key-id>",
+		Short: "Create relay token",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, records, err := loadTokenRecords()
+			if err != nil {
+				return err
+			}
+			keyID := args[0]
+			if _, _, err := tokenstore.Find(records, keyID); err == nil {
+				return fmt.Errorf("token already exists: %s", keyID)
+			}
+			token, err := tokenstore.GenerateToken()
+			if err != nil {
+				return err
+			}
+			records = append(records, tokenstore.NewRecord(keyID, token, time.Now()))
+			if err := store.Save(records); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "key-id: %s\nrelay token: %s\n", keyID, token)
+			return err
+		},
+	}
+}
+
+func newTokenListCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List relay tokens",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, records, err := loadTokenRecords()
+			if err != nil {
+				return err
+			}
+			if len(records) == 0 {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "no tokens")
+				return err
+			}
+			for _, record := range records {
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\tenabled=%t\tcreated=%s\trotated=%s\n", record.KeyID, record.Enabled, record.CreatedAt, record.RotatedAt)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func newTokenInspectCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "inspect <key-id>",
+		Short: "Inspect relay token metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, records, err := loadTokenRecords()
+			if err != nil {
+				return err
+			}
+			_, record, err := tokenstore.Find(records, args[0])
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "key-id: %s\nenabled: %t\ncreated-at: %s\nrotated-at: %s\n", record.KeyID, record.Enabled, record.CreatedAt, record.RotatedAt)
+			return err
+		},
+	}
+}
+
+func newTokenEnableCommand(enable bool) *cobra.Command {
+	use := "enable <key-id>"
+	short := "Enable relay token"
+	if !enable {
+		use = "disable <key-id>"
+		short = "Disable relay token"
+	}
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, records, err := loadTokenRecords()
+			if err != nil {
+				return err
+			}
+			idx, record, err := tokenstore.Find(records, args[0])
+			if err != nil {
+				return err
+			}
+			record.Enabled = enable
+			records[idx] = record
+			if err := store.Save(records); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "key-id: %s\nenabled: %t\n", record.KeyID, record.Enabled)
+			return err
+		},
+	}
+}
+
+func newTokenDeleteCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <key-id>",
+		Short: "Delete relay token",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, records, err := loadTokenRecords()
+			if err != nil {
+				return err
+			}
+			idx, record, err := tokenstore.Find(records, args[0])
+			if err != nil {
+				return err
+			}
+			records = append(records[:idx], records[idx+1:]...)
+			if err := store.Save(records); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "deleted token: %s\n", record.KeyID)
+			return err
+		},
+	}
+}
+
+func newTokenRotateCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rotate <key-id>",
+		Short: "Rotate relay token",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, records, err := loadTokenRecords()
+			if err != nil {
+				return err
+			}
+			idx, record, err := tokenstore.Find(records, args[0])
+			if err != nil {
+				return err
+			}
+			token, err := tokenstore.GenerateToken()
+			if err != nil {
+				return err
+			}
+			record.TokenHash = tokenstore.HashToken(token)
+			record.RotatedAt = time.Now().UTC().Format(time.RFC3339)
+			records[idx] = record
+			if err := store.Save(records); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "key-id: %s\nrelay token: %s\n", record.KeyID, token)
+			return err
+		},
+	}
+}
+
+func loadTokenRecords() (*tokenstore.Store, []tokenstore.Record, error) {
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		return nil, nil, err
+	}
+	store := tokenstore.New(paths.TokenFile)
+	records, err := store.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, records, nil
 }
 
 func newInitCommand() *cobra.Command {

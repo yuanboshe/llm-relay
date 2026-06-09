@@ -25,9 +25,9 @@ func TestSaveAndLoad(t *testing.T) {
 
 	want := []Record{
 		{
-			ID:        "example-id",
-			Label:     "local development",
-			CreatedAt: now,
+			KeyID:     "example-id",
+			TokenHash: "sha256:example",
+			CreatedAt: now.Format(time.RFC3339),
 			Enabled:   true,
 		},
 	}
@@ -42,7 +42,25 @@ func TestSaveAndLoad(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("records length = %d, want 1", len(got))
 	}
-	if got[0].ID != want[0].ID || got[0].Label != want[0].Label || !got[0].Enabled {
+	if got[0].KeyID != want[0].KeyID || got[0].TokenHash != want[0].TokenHash || !got[0].Enabled {
 		t.Fatalf("record = %+v, want %+v", got[0], want[0])
+	}
+}
+
+func TestGenerateTokenAndHashToken(t *testing.T) {
+	token, err := GenerateToken()
+	if err != nil {
+		t.Fatalf("GenerateToken returned error: %v", err)
+	}
+	if len(token) <= len("llmr_") || token[:len("llmr_")] != "llmr_" {
+		t.Fatalf("token = %q, want llmr_ prefix", token)
+	}
+
+	hash := HashToken(token)
+	if len(hash) != len("sha256:")+64 {
+		t.Fatalf("hash = %q, want sha256 hex", hash)
+	}
+	if hash == token {
+		t.Fatal("hash equals plaintext token")
 	}
 }

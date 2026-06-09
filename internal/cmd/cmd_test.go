@@ -145,3 +145,93 @@ api_key = "%s"
 		t.Fatalf("config show = %q, want redacted marker", out)
 	}
 }
+
+func TestRunTokenCreateStoresOnlyHash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run([]string{"init"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(init) returned error: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if err := Run([]string{"token", "create", "local"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token create) returned error: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "llmr_") {
+		t.Fatalf("token create output = %q, want one-time relay token", out)
+	}
+	tokenFile := filepath.Join(home, "tokens.json")
+	data, err := os.ReadFile(tokenFile)
+	if err != nil {
+		t.Fatalf("read token store: %v", err)
+	}
+	if strings.Contains(string(data), "llmr_") {
+		t.Fatalf("token store leaked plaintext token: %q", string(data))
+	}
+	if !strings.Contains(string(data), "sha256:") {
+		t.Fatalf("token store = %q, want sha256 hash", string(data))
+	}
+}
+
+func TestRunTokenLifecycle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	for _, args := range [][]string{
+		{"init"},
+		{"token", "create", "local"},
+		{"token", "disable", "local"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"token", "inspect", "local"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token inspect) returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "enabled: false") {
+		t.Fatalf("inspect disabled output = %q, want disabled state", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"token", "enable", "local"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token enable) returned error: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"token", "rotate", "local"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token rotate) returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "llmr_") {
+		t.Fatalf("rotate output = %q, want one-time relay token", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"token", "delete", "local"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token delete) returned error: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"token", "list"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(token list) returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "no tokens") {
+		t.Fatalf("list output = %q, want no tokens", stdout.String())
+	}
+}
