@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yuanboshe/llm-relay/internal/config"
+	"github.com/yuanboshe/llm-relay/internal/service"
 )
 
 func setInstallTestHome(t *testing.T) string {
@@ -29,6 +32,19 @@ type fakeExternalRunner struct {
 func (r *fakeExternalRunner) Run(name string, args ...string) (string, error) {
 	r.calls = append(r.calls, strings.Join(append([]string{name}, args...), " "))
 	return r.out, r.err
+}
+
+type fakeUninstallManager struct {
+	status     service.Status
+	stopCalled bool
+}
+
+func (m *fakeUninstallManager) Start() (service.Status, error)   { return m.status, nil }
+func (m *fakeUninstallManager) Restart() (service.Status, error) { return m.status, nil }
+func (m *fakeUninstallManager) Status() (service.Status, error)  { return m.status, nil }
+func (m *fakeUninstallManager) Stop() (service.Status, error) {
+	m.stopCalled = true
+	return service.Status{State: service.StateStopped}, nil
 }
 
 func setSetupExternalTestRunner(t *testing.T, runner *fakeExternalRunner, goos string) {
@@ -691,6 +707,118 @@ func TestRunConfigSetUpdatesKnownValuesAndRedactsShow(t *testing.T) {
 	}
 	if strings.Contains(out, keyValue) {
 		t.Fatalf("config show leaked key: %q", out)
+	}
+}
+
+func TestRunUninstallRemovesInstallArtifactsAndKeepsDataByDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	t.Setenv("LLMRELAY_INSTALL_HOME", home)
+	t.Setenv("LLMRELAY_ZSHRC", filepath.Join(home, ".zshrc"))
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatalf("DefaultPaths returned error: %v", err)
+	}
+	files := map[string]string{
+		filepath.Join(home, "Library", "Application Support", "llmrelay", "bin", "llmrelay"): "binary",
+		filepath.Join(home, ".local", "bin", "llmrelay"):                                     "link",
+		filepath.Join(home, ".zsh", "completions", "_llmrelay"):                              "completion",
+		paths.ConfigFile: "listen_addr = \"127.0.0.1:18080\"\n",
+		paths.TokenFile:  "[]\n",
+	}
+	for path, data := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	stub := &fakeUninstallManager{status: service.Status{State: service.StateRunning}}
+	oldFactory := newBackgroundManager
+	newBackgroundManager = func() (backgroundManager, error) { return stub, nil }
+	t.Cleanup(func() { newBackgroundManager = oldFactory })
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := Run([]string{"uninstall", "--yes"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(uninstall) returned error: %v", err)
+	}
+	if !stub.stopCalled {
+		t.Fatal("Stop was not called")
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"service: stopped",
+		"removed: " + filepath.Join(home, "Library", "Application Support", "llmrelay", "bin", "llmrelay"),
+		"removed: " + filepath.Join(home, ".local", "bin", "llmrelay"),
+		"removed: " + filepath.Join(home, ".zsh", "completions", "_llmrelay"),
+		"kept: " + home,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("uninstall output = %q, want %q", out, want)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(home, "Library", "Application Support", "llmrelay", "bin", "llmrelay"),
+		filepath.Join(home, ".local", "bin", "llmrelay"),
+		filepath.Join(home, ".zsh", "completions", "_llmrelay"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists or stat failed: %v", path, err)
+		}
+	}
+	for _, path := range []string{paths.ConfigFile, paths.TokenFile} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected preserved %s: %v", path, err)
+		}
+	}
+}
+
+func TestRunUninstallDryRunOnlyPrintsPlan(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	t.Setenv("LLMRELAY_INSTALL_HOME", home)
+	t.Setenv("LLMRELAY_ZSHRC", filepath.Join(home, ".zshrc"))
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatalf("DefaultPaths returned error: %v", err)
+	}
+	if err := os.MkdirAll(paths.Dir, 0o700); err != nil {
+		t.Fatalf("mkdir config home: %v", err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte("config"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldFactory := newBackgroundManager
+	newBackgroundManager = func() (backgroundManager, error) {
+		t.Fatal("background manager should not be created in dry-run")
+		return nil, nil
+	}
+	t.Cleanup(func() { newBackgroundManager = oldFactory })
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := Run([]string{"uninstall", "--dry-run", "--purge", "--yes"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(uninstall --dry-run) returned error: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"dry-run: uninstall plan",
+		"would stop background service",
+		"would remove: " + filepath.Join(home, "Library", "Application Support", "llmrelay", "bin", "llmrelay"),
+		"would purge: " + home,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output = %q, want %q", out, want)
+		}
+	}
+	if _, err := os.Stat(paths.ConfigFile); err != nil {
+		t.Fatalf("dry-run should not delete config: %v", err)
 	}
 }
 

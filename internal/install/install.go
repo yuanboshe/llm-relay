@@ -1,6 +1,7 @@
 package install
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,6 +38,28 @@ type Result struct {
 	TokenStoreCreated bool
 }
 
+// UninstallOptions configures a removal run.
+type UninstallOptions struct {
+	UserHome    string
+	ZshrcPath   string
+	ConfigPaths config.Paths
+	Purge       bool
+}
+
+// UninstallResult describes files removed by the uninstaller.
+type UninstallResult struct {
+	InstalledPath     string
+	SymlinkPath       string
+	ZshrcPath         string
+	CompletionPath    string
+	ConfigDir         string
+	Purged            bool
+	RemovedInstalled  bool
+	RemovedSymlink    bool
+	RemovedZshrc      bool
+	RemovedCompletion bool
+}
+
 // Run installs the current binary into a stable user path and initializes local files.
 func Run(opts Options) (Result, error) {
 	if strings.TrimSpace(opts.SourcePath) == "" {
@@ -54,9 +77,7 @@ func Run(opts Options) (Result, error) {
 		}
 	}
 
-	installedPath := filepath.Join(userHome, "Library", "Application Support", "llmrelay", "bin", commandName)
-	symlinkPath := filepath.Join(userHome, ".local", "bin", commandName)
-	completionPath := filepath.Join(userHome, completionDirName, "_"+commandName)
+	installedPath, symlinkPath, completionPath := installationPaths(userHome)
 	zshrcPath := opts.ZshrcPath
 	if strings.TrimSpace(zshrcPath) == "" {
 		zshrcPath = filepath.Join(userHome, ".zshrc")
@@ -93,6 +114,75 @@ func Run(opts Options) (Result, error) {
 	}, nil
 }
 
+// Uninstall removes user-level installation artifacts.
+func Uninstall(opts UninstallOptions) (UninstallResult, error) {
+	userHome, err := resolveUserHome(opts.UserHome)
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	paths := opts.ConfigPaths
+	if paths.Dir == "" || paths.ConfigFile == "" || paths.TokenFile == "" {
+		paths, err = config.DefaultPaths()
+		if err != nil {
+			return UninstallResult{}, err
+		}
+	}
+	zshrcPath := opts.ZshrcPath
+	if strings.TrimSpace(zshrcPath) == "" {
+		zshrcPath = filepath.Join(userHome, ".zshrc")
+	}
+	installedPath, symlinkPath, completionPath := installationPaths(userHome)
+	result := UninstallResult{
+		InstalledPath:  installedPath,
+		SymlinkPath:    symlinkPath,
+		ZshrcPath:      zshrcPath,
+		CompletionPath: completionPath,
+		ConfigDir:      paths.Dir,
+		Purged:         opts.Purge,
+	}
+
+	var errs []string
+	if err := removeTrackedFile(installedPath, &result.RemovedInstalled); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := removeTrackedFile(symlinkPath, &result.RemovedSymlink); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := removeTrackedFile(completionPath, &result.RemovedCompletion); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if removed, err := removeShellBlock(zshrcPath); err != nil {
+		errs = append(errs, fmt.Sprintf("%s: %v", zshrcPath, err))
+	} else if removed {
+		result.RemovedZshrc = true
+	}
+	if opts.Purge && paths.Dir != "" {
+		if err := os.RemoveAll(paths.Dir); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", paths.Dir, err))
+		}
+	}
+	if len(errs) > 0 {
+		return result, errors.New(strings.Join(errs, "; "))
+	}
+	return result, nil
+}
+
+func removeTrackedFile(path string, removed *bool) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if removed != nil {
+		*removed = true
+	}
+	return nil
+}
+
 func resolveUserHome(userHome string) (string, error) {
 	if strings.TrimSpace(userHome) != "" {
 		return userHome, nil
@@ -102,6 +192,12 @@ func resolveUserHome(userHome string) (string, error) {
 		return "", err
 	}
 	return home, nil
+}
+
+func installationPaths(userHome string) (string, string, string) {
+	return filepath.Join(userHome, "Library", "Application Support", "llmrelay", "bin", commandName),
+		filepath.Join(userHome, ".local", "bin", commandName),
+		filepath.Join(userHome, completionDirName, "_"+commandName)
 }
 
 func copyFile(src string, dst string, mode os.FileMode) error {
@@ -146,6 +242,31 @@ func ensureShellBlock(path string, block string) error {
 	}
 	text += block
 	return writeFile(path, []byte(text), 0o644)
+}
+
+func removeShellBlock(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	text := string(data)
+	if !strings.Contains(text, shellBlockStart) {
+		return false, nil
+	}
+	start := strings.Index(text, shellBlockStart)
+	end := strings.Index(text[start:], shellBlockEnd)
+	if end < 0 {
+		return false, fmt.Errorf("shell integration block end marker not found in %s", path)
+	}
+	end += start + len(shellBlockEnd)
+	trimmed := strings.TrimSpace(text[:start] + "\n" + text[end:])
+	if trimmed != "" {
+		trimmed += "\n"
+	}
+	return true, writeFile(path, []byte(trimmed), 0o644)
 }
 
 func shellBlock(userHome string) string {

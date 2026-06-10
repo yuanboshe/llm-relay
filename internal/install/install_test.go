@@ -141,3 +141,100 @@ func TestInstallWritesZshCompletion(t *testing.T) {
 		t.Fatalf("completion = %q, want llmrelay compdef", string(completion))
 	}
 }
+
+func TestUninstallRemovesInstallArtifactsAndKeepsConfigByDefault(t *testing.T) {
+	dir := t.TempDir()
+	configHome := filepath.Join(dir, ".llmrelay")
+	paths := config.Paths{
+		Dir:        configHome,
+		ConfigFile: filepath.Join(configHome, config.DefaultConfigName),
+		TokenFile:  filepath.Join(configHome, config.DefaultStoreName),
+		PIDFile:    filepath.Join(configHome, config.DefaultPIDName),
+		LogFile:    filepath.Join(configHome, config.DefaultLogName),
+	}
+	installedPath := filepath.Join(dir, "Library", "Application Support", "llmrelay", "bin", "llmrelay")
+	symlinkPath := filepath.Join(dir, ".local", "bin", "llmrelay")
+	completionPath := filepath.Join(dir, ".zsh", "completions", "_llmrelay")
+	zshrcPath := filepath.Join(dir, ".zshrc")
+
+	files := []struct {
+		path string
+		data string
+	}{
+		{installedPath, "binary"},
+		{symlinkPath, "link"},
+		{completionPath, "completion"},
+		{paths.ConfigFile, "listen_addr = \"127.0.0.1:18080\"\n"},
+		{paths.TokenFile, "[]\n"},
+		{paths.PIDFile, "1234\n"},
+		{paths.LogFile, "log\n"},
+		{zshrcPath, "before\n" + shellBlock(dir) + "after\n"},
+	}
+	for _, file := range files {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", file.path, err)
+		}
+		if err := os.WriteFile(file.path, []byte(file.data), 0o600); err != nil {
+			t.Fatalf("write %s: %v", file.path, err)
+		}
+	}
+
+	result, err := Uninstall(UninstallOptions{
+		UserHome:    dir,
+		ZshrcPath:   zshrcPath,
+		ConfigPaths: paths,
+	})
+	if err != nil {
+		t.Fatalf("Uninstall returned error: %v", err)
+	}
+	if result.InstalledPath != installedPath || result.SymlinkPath != symlinkPath || result.CompletionPath != completionPath {
+		t.Fatalf("result = %#v, want install paths", result)
+	}
+	for _, path := range []string{installedPath, symlinkPath, completionPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists or stat failed: %v", path, err)
+		}
+	}
+	zshrc, err := os.ReadFile(zshrcPath)
+	if err != nil {
+		t.Fatalf("read zshrc: %v", err)
+	}
+	if strings.Contains(string(zshrc), shellBlockStart) || strings.Contains(string(zshrc), shellBlockEnd) {
+		t.Fatalf("zshrc still contains shell block: %q", string(zshrc))
+	}
+	for _, path := range []string{paths.ConfigFile, paths.TokenFile, paths.PIDFile, paths.LogFile} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected preserved %s: %v", path, err)
+		}
+	}
+}
+
+func TestUninstallPurgesConfigDirectory(t *testing.T) {
+	dir := t.TempDir()
+	configHome := filepath.Join(dir, ".llmrelay")
+	paths := config.Paths{
+		Dir:        configHome,
+		ConfigFile: filepath.Join(configHome, config.DefaultConfigName),
+		TokenFile:  filepath.Join(configHome, config.DefaultStoreName),
+	}
+	if err := os.MkdirAll(configHome, 0o700); err != nil {
+		t.Fatalf("mkdir config home: %v", err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte("config"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(paths.TokenFile, []byte("[]\n"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	if _, err := Uninstall(UninstallOptions{
+		UserHome:    dir,
+		ConfigPaths: paths,
+		Purge:       true,
+	}); err != nil {
+		t.Fatalf("Uninstall returned error: %v", err)
+	}
+	if _, err := os.Stat(configHome); !os.IsNotExist(err) {
+		t.Fatalf("config home still exists or stat failed: %v", err)
+	}
+}

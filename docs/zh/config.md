@@ -80,12 +80,4 @@ remote_port = "18080"
 
 SSH 配置、私钥、ssh-agent、known_hosts 和 ProxyJump 都复用系统 OpenSSH 行为。
 
-## 常用命令
-
-```sh
-llmrelay config show
-llmrelay config validate
-llmrelay doctor
-llmrelay status
-llmrelay logs --tail 50
-```
+相关命令见 [命令手册](./commands.md)。

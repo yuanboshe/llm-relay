@@ -79,6 +79,7 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 
 	root.AddCommand(
 		newInstallCommand(root),
+		newUninstallCommand(stdin),
 		newSetupCommand(stdin),
 		newVersionCommand(),
 		newConfigCommand(stdin),
@@ -479,6 +480,157 @@ func newInstallCommand(root *cobra.Command) *cobra.Command {
 	installCmd.Flags().BoolVar(&skipShellInit, "skip-shell-init", false, "do not update shell startup files")
 	installCmd.Flags().BoolVar(&skipCompletion, "skip-completion", false, "do not install zsh completion")
 	return installCmd
+}
+
+func newUninstallCommand(stdin io.Reader) *cobra.Command {
+	var yes bool
+	var purge bool
+	var removeCloudflared bool
+	var dryRun bool
+	uninstallCmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove llmrelay from the current user",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+			if !yes && !dryRun {
+				reader := bufio.NewReader(cmd.InOrStdin())
+				ok, err := promptYesNo(out, reader, "Remove llmrelay from this machine? [y/N]: ", false)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					_, err = fmt.Fprintln(out, "aborted")
+					return err
+				}
+			}
+			cfgPaths, err := config.DefaultPaths()
+			if err != nil {
+				return err
+			}
+			installHome := os.Getenv("LLMRELAY_INSTALL_HOME")
+			if strings.TrimSpace(installHome) == "" {
+				installHome, err = os.UserHomeDir()
+				if err != nil {
+					return err
+				}
+			}
+			if dryRun {
+				return printUninstallPlan(out, installHome, cfgPaths, purge, removeCloudflared)
+			}
+			manager, err := newBackgroundManager()
+			if err != nil {
+				return err
+			}
+			status, err := manager.Status()
+			if err != nil {
+				return err
+			}
+			if status.State == service.StateRunning || status.State == service.StateStale {
+				status, err = manager.Stop()
+				if err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintln(out, "service: stopped"); err != nil {
+					return err
+				}
+			} else if _, err := fmt.Fprintln(out, "service: already stopped"); err != nil {
+				return err
+			}
+			result, err := install.Uninstall(install.UninstallOptions{
+				UserHome:    installHome,
+				ConfigPaths: cfgPaths,
+				Purge:       purge,
+			})
+			if err != nil {
+				return err
+			}
+			if err := printUninstallResult(out, result); err != nil {
+				return err
+			}
+			if removeCloudflared {
+				if err := uninstallCloudflaredService(out); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	uninstallCmd.Flags().BoolVar(&yes, "yes", false, "do not prompt for confirmation")
+	uninstallCmd.Flags().BoolVar(&purge, "purge", false, "remove config, token, and log data under ~/.llmrelay")
+	uninstallCmd.Flags().BoolVar(&removeCloudflared, "remove-cloudflared", false, "remove the macOS cloudflared service if present")
+	uninstallCmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be removed without changing files")
+	return uninstallCmd
+}
+
+func printUninstallPlan(out io.Writer, installHome string, cfgPaths config.Paths, purge bool, removeCloudflared bool) error {
+	installedPath := filepath.Join(installHome, "Library", "Application Support", "llmrelay", "bin", "llmrelay")
+	symlinkPath := filepath.Join(installHome, ".local", "bin", "llmrelay")
+	completionPath := filepath.Join(installHome, ".zsh", "completions", "_llmrelay")
+	if _, err := fmt.Fprintln(out, "dry-run: uninstall plan"); err != nil {
+		return err
+	}
+	for _, line := range []string{
+		"would stop background service",
+		"would remove: " + installedPath,
+		"would remove: " + symlinkPath,
+		"would remove: " + completionPath,
+		"would remove shell integration from: " + filepath.Join(installHome, ".zshrc"),
+	} {
+		if _, err := fmt.Fprintln(out, line); err != nil {
+			return err
+		}
+	}
+	if purge {
+		if _, err := fmt.Fprintln(out, "would purge: "+cfgPaths.Dir); err != nil {
+			return err
+		}
+	}
+	if removeCloudflared {
+		if _, err := fmt.Fprintln(out, "would remove cloudflared service"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printUninstallResult(out io.Writer, result install.UninstallResult) error {
+	lines := []string{}
+	if result.RemovedInstalled {
+		lines = append(lines, "removed: "+result.InstalledPath)
+	}
+	if result.RemovedSymlink {
+		lines = append(lines, "removed: "+result.SymlinkPath)
+	}
+	if result.RemovedCompletion {
+		lines = append(lines, "removed: "+result.CompletionPath)
+	}
+	if result.RemovedZshrc {
+		lines = append(lines, "removed shell integration: "+result.ZshrcPath)
+	}
+	if result.Purged {
+		lines = append(lines, "purged: "+result.ConfigDir)
+	} else {
+		lines = append(lines, "kept: "+result.ConfigDir)
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(out, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func uninstallCloudflaredService(out io.Writer) error {
+	if runtime.GOOS != "darwin" {
+		_, err := fmt.Fprintln(out, "cloudflared: skipped (macOS only)")
+		return err
+	}
+	if _, err := setupExternalRunner.Run("sudo", "cloudflared", "service", "uninstall"); err != nil {
+		return fmt.Errorf("cloudflared uninstall failed: %w", err)
+	}
+	_, err := fmt.Fprintln(out, "cloudflared: removed")
+	return err
 }
 
 func newSetupCommand(stdin io.Reader) *cobra.Command {
@@ -1488,6 +1640,8 @@ type backgroundManager interface {
 	Restart() (service.Status, error)
 	Status() (service.Status, error)
 }
+
+var newBackgroundManager = newServiceManager
 
 func newServiceManager() (backgroundManager, error) {
 	paths, err := config.DefaultPaths()

@@ -64,8 +64,8 @@ relay host 上运行：
 ```sh
 llmrelay setup
 llmrelay start
-llmrelay test local
-llmrelay test public https://llm.example.test
+llmrelay test <key-id>
+llmrelay test <key-id> https://llm.example.test
 ```
 
 Cloudflare Tunnel 不使用 `[tunnel]` SSH 配置：
@@ -138,8 +138,8 @@ api_key = llmr_xxx
 - `llmrelay doctor` 不输出 upstream API key 或 relay token 明文。
 - `llmrelay test upstream` 在 relay host 上成功；如果 upstream 返回模型 ID，输出中会展示部分模型列表。
 - `llmrelay start` 后 `llmrelay status` 显示后台服务运行。
-- `llmrelay test local` 在 relay host 上成功，并展示通过 relay token 获取到的部分模型列表。
-- `llmrelay test public` 或 `llmrelay test public <url>` 在公网入口上成功。
+- `llmrelay test <key-id>` 在 relay host 上成功，并展示通过 relay token 获取到的部分模型列表。
+- `llmrelay test <key-id> <url>` 在公网入口上成功。
 - `llmrelay logs --tail 50` 能看到本地监听和 tunnel 启动信息。
 - remote server 只连接 `127.0.0.1:<remote_port>`，不保存 upstream API key。
 - 客户端使用 relay token 调用 `/v1/models` 成功。

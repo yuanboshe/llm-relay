@@ -70,7 +70,7 @@ llmrelay serve
 ```sh
 llmrelay doctor
 llmrelay start
-llmrelay test local
+llmrelay test remote-client
 llmrelay status
 llmrelay logs --tail 50
 ```
@@ -89,11 +89,11 @@ api_key = llmr_xxx
 验证时优先使用内置命令：
 
 ```sh
-llmrelay test local
+llmrelay test remote-client
 ```
 
-测试远程入口时使用 `test public`，可以读取配置中的 `public_url`，也可以临时传入 URL：
+测试远程入口时使用 `test <key-id> <url>`，可以读取配置中的 `public_url`，也可以临时传入 URL：
 
 ```sh
-llmrelay test public https://relay.example.test
+llmrelay test remote-client https://relay.example.test
 ```

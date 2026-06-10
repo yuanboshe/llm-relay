@@ -44,7 +44,7 @@ llmrelay test upstream
 ```sh
 llmrelay status
 llmrelay logs --tail 100
-llmrelay test local
+llmrelay test <key-id>
 ```
 
 排查时可以前台运行：
