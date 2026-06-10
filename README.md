@@ -41,7 +41,8 @@ make build VERSION=v0.1.0 COMMIT=abc1234 BUILD_DATE=2026-06-11T00:00:00Z
 ## Documentation
 
 User documentation is available at <https://yuanboshe.github.io/llm-relay/>.
-For the full command reference, see [docs/zh/commands.md](./docs/zh/commands.md).
+For the full command reference, see [docs/en/commands.md](./docs/en/commands.md).
+Chinese documentation is also available at [docs/zh/](./docs/zh/).
 
 ## Quick Start
 

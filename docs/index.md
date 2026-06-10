@@ -5,12 +5,20 @@ import { useRouter } from "vitepress";
 const router = useRouter();
 
 onMounted(() => {
-  router.go("/zh/");
+  const languages = Array.isArray(navigator.languages) && navigator.languages.length > 0
+    ? navigator.languages
+    : [navigator.language || ""];
+  const prefersChinese = languages.some((language) =>
+    language.toLowerCase().startsWith("zh"),
+  );
+
+  router.go(prefersChinese ? "/zh/" : "/en/");
 });
 </script>
 
-# llm-relay 文档
+# llm-relay Documentation
 
-正在进入 [中文文档](./zh/)。
+Choose a documentation home:
 
-当前文档站先提供中文版本。英文版本会在中文内容稳定后补齐。
+- [English documentation](./en/)
+- [中文文档](./zh/)
