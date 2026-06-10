@@ -51,15 +51,22 @@ func DefaultLaunchAgentManager(executable string, logFile string) (LaunchAgentMa
 
 // Start writes the LaunchAgent plist, bootstraps it, and starts the service.
 func (m LaunchAgentManager) Start() (Status, error) {
+	current, _ := m.Status()
+	if current.State == StateRunning {
+		current.Message = "already running"
+		return current, nil
+	}
 	if err := m.writePlist(); err != nil {
 		return Status{}, err
 	}
 	target := m.target()
-	_, _ = m.runner().Run("launchctl", "bootout", target)
+	if current.Message == "launchagent loaded" {
+		_, _ = m.runner().Run("launchctl", "bootout", target)
+	}
 	if _, err := m.runner().Run("launchctl", "bootstrap", m.domain(), m.PlistPath); err != nil {
 		return Status{}, fmt.Errorf("launchctl bootstrap: %w", err)
 	}
-	if _, err := m.runner().Run("launchctl", "kickstart", "-k", target); err != nil {
+	if _, err := m.runner().Run("launchctl", "kickstart", target); err != nil {
 		return Status{}, fmt.Errorf("launchctl kickstart: %w", err)
 	}
 	status, err := m.Status()

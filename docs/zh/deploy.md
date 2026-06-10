@@ -1,6 +1,6 @@
 # 部署闭环
 
-`llm-relay` 的部署目标是把 upstream API key 留在受控的 relay host 上。remote server、reverse proxy、SSH tunnel 和客户端都只接触 relay token，不保存 upstream API key。
+`llm-relay` 的部署目标是把 upstream API key 留在受控的 relay host 上。Cloudflare、remote server、reverse proxy、SSH tunnel 和客户端都只接触 relay token，不保存 upstream API key。
 
 ## 局域网入口
 
@@ -33,7 +33,49 @@ api_key = llmr_xxx
 
 第一版局域网入口使用 HTTP + relay token。如果需要局域网 HTTPS，可以后续用本机 Caddy 或内置 TLS 单独规划。
 
-## 远程服务器入口
+## Cloudflare Tunnel 入口
+
+Cloudflare Tunnel 是推荐远程入口，适合没有自有服务器或不想配置 SSH 的用户。
+
+```text
+remote client
+  base_url = https://llm.example.test
+  api_key = llmr_xxx
+        ↓
+Cloudflare Public Hostname
+        ↓
+cloudflared on relay host
+        ↓
+relay host llmrelay
+  validate relay token
+  replace Authorization
+        ↓
+upstream LLM provider
+```
+
+Cloudflare Public Hostname 的 Service URL 指向本机 relay：
+
+```text
+http://127.0.0.1:18080
+```
+
+relay host 上运行：
+
+```sh
+llmrelay setup
+llmrelay config set public_url https://llm.example.test
+llmrelay start
+llmrelay test public
+```
+
+Cloudflare Tunnel 不使用 `[tunnel]` SSH 配置：
+
+```toml
+[tunnel]
+enabled = false
+```
+
+## 高级入口：远程服务器和 SSH reverse tunnel
 
 远程入口适合让远程客户端通过 HTTPS 访问 relay host。remote server 只提供 HTTPS 和透明转发，不保存 upstream API key，也不做 relay token 鉴权。
 
@@ -94,8 +136,9 @@ api_key = llmr_xxx
 ## 验证清单
 
 - `llmrelay doctor` 不输出 upstream API key 或 relay token 明文。
-- `llmrelay config test --path /v1/models` 在 relay host 上成功。
+- `llmrelay test upstream` 在 relay host 上成功。
 - `llmrelay start` 后 `llmrelay status` 显示后台服务运行。
+- `llmrelay test local` 在 relay host 上成功。
 - `llmrelay logs --tail 50` 能看到本地监听和 tunnel 启动信息。
 - remote server 只连接 `127.0.0.1:<remote_port>`，不保存 upstream API key。
 - 客户端使用 relay token 调用 `/v1/models` 成功。

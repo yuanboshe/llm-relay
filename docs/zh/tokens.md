@@ -7,7 +7,7 @@ relay token 不能发送给上游 provider。
 ## 创建
 
 ```sh
-llmrelay token create remote-client --name "Remote client"
+llmrelay token create remote-client
 ```
 
 输出中的 relay token 需要复制给对应客户端：
@@ -21,16 +21,10 @@ relay token: llmr_xxx
 
 ```sh
 llmrelay token list
-llmrelay token inspect remote-client
+llmrelay token show remote-client
 ```
 
-`list` 和 `inspect` 展示 token 元数据，不主动输出明文 token。
-
-## 本地校验
-
-```sh
-printf '%s\n' 'llmr_xxx' | llmrelay token verify remote-client --stdin
-```
+`list` 和 `show` 会输出明文 relay token，便于复制到客户机。命令输出应按敏感凭据处理。
 
 ## 禁用与启用
 
@@ -52,7 +46,7 @@ llmrelay token delete remote-client
 
 ## tokens.json
 
-`tokens.json` 由 `llmrelay token ...` 命令管理。当前版本会保存 relay token 明文，同时保留 SHA-256 hash 用于兼容和本地校验。
+`tokens.json` 由 `llmrelay token ...` 命令管理。当前版本会保存 relay token 明文；内部可以保留 hash 字段用于旧记录兼容，但用户命令面以明文 token 为准。
 
 示例：
 
@@ -60,8 +54,6 @@ llmrelay token delete remote-client
 [
   {
     "key_id": "remote-client",
-    "name": "Remote client",
-    "note": "",
     "token": "llmr_xxx",
     "token_hash": "sha256:<hex>",
     "created_at": "2026-06-10T00:00:00Z",

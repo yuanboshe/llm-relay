@@ -27,7 +27,7 @@ echo "$LLMRELAY_HOME"
 在 relay host 上测试 upstream：
 
 ```sh
-llmrelay config test --path /v1/models
+llmrelay test upstream
 ```
 
 如果失败，检查：
@@ -44,6 +44,7 @@ llmrelay config test --path /v1/models
 ```sh
 llmrelay status
 llmrelay logs --tail 100
+llmrelay test local
 ```
 
 排查时可以前台运行：

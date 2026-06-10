@@ -30,9 +30,9 @@ llmrelay setup
 也可以用脚本化命令配置 upstream：
 
 ```sh
-llmrelay config set-url https://api.example.test/v1
-llmrelay config set-key --prompt
-llmrelay config test --path /v1/models
+llmrelay config set upstream.base_url https://api.example.test/v1
+llmrelay config set upstream.api_key
+llmrelay test upstream
 ```
 
 ## 3. 创建额外 token
@@ -40,8 +40,9 @@ llmrelay config test --path /v1/models
 按客户端或使用场景创建 relay token。
 
 ```sh
-llmrelay token create remote-client --name "Remote client"
-llmrelay token create lan-client --name "LAN client"
+llmrelay token create remote-client
+llmrelay token create lan-client
+llmrelay token show remote-client
 ```
 
 `tokens.json` 会保存可直接使用的 relay token 明文。这个文件应仅限本机用户可读写，不要同步、泄漏或提交。
@@ -61,6 +62,7 @@ llmrelay serve
 ```sh
 llmrelay doctor
 llmrelay start
+llmrelay test local
 llmrelay status
 llmrelay logs --tail 50
 ```
@@ -76,8 +78,8 @@ base_url = http://relay-host-lan-ip:18080
 api_key = llmr_xxx
 ```
 
-验证时优先使用轻量路径：
+验证时优先使用内置命令：
 
 ```sh
-curl -H "Authorization: Bearer llmr_xxx" http://relay-host-lan-ip:18080/v1/models
+llmrelay test local
 ```

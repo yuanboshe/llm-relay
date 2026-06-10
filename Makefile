@@ -2,8 +2,9 @@
 
 VERSION ?= v0.0.0
 COMMIT ?= $(shell git rev-parse --short HEAD)
-BUILD_DATE ?= unknown
-BUILD := go run ./scripts/build-release.go -version $(VERSION) -commit $(COMMIT) -date $(BUILD_DATE)
+BUILD_DATE ?=
+BUILD_DATE_FLAG := $(if $(BUILD_DATE),-date $(BUILD_DATE),)
+BUILD := go run ./scripts/build-release.go -version $(VERSION) -commit $(COMMIT) $(BUILD_DATE_FLAG)
 
 test:
 	go test ./...

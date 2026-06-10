@@ -97,7 +97,7 @@ func TestManagerStartWritesPIDAndServeCommand(t *testing.T) {
 	}
 }
 
-func TestManagerStartRefusesAlreadyRunningPID(t *testing.T) {
+func TestManagerStartReportsAlreadyRunningPID(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "llmrelay.pid")
 	if err := os.WriteFile(pidFile, []byte("1234\n"), 0o600); err != nil {
@@ -112,8 +112,15 @@ func TestManagerStartRefusesAlreadyRunningPID(t *testing.T) {
 		Controller: &fakeController{running: map[int]bool{1234: true}},
 	}
 
-	if _, err := manager.Start(); err == nil {
-		t.Fatal("Start returned nil error, want already running error")
+	status, err := manager.Start()
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if status.State != StateRunning || status.PID != 1234 {
+		t.Fatalf("status = %#v, want running pid 1234", status)
+	}
+	if status.Message != "already running" {
+		t.Fatalf("message = %q, want already running", status.Message)
 	}
 	if starter.started {
 		t.Fatal("starter was called for already running service")

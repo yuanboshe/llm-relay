@@ -96,150 +96,6 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 	return root
 }
 
-func newUpstreamSetURLCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "set-url <base-url>",
-		Short: "Set upstream base URL",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			baseURL, err := normalizeBaseURL(args[0])
-			if err != nil {
-				return err
-			}
-			cfg, paths, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			cfg.Upstream.BaseURL = baseURL
-			if err := config.Save(paths.ConfigFile, cfg); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "upstream base_url: %s\n", baseURL)
-			return err
-		},
-	}
-}
-
-func newUpstreamSetKeyCommand(stdin io.Reader) *cobra.Command {
-	var envName string
-	var readStdin bool
-	var prompt bool
-
-	setKeyCmd := &cobra.Command{
-		Use:   "set-key",
-		Short: "Set upstream API key source",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			selected := 0
-			if envName != "" {
-				selected++
-			}
-			if readStdin {
-				selected++
-			}
-			if prompt {
-				selected++
-			}
-			if selected != 1 {
-				return fmt.Errorf("exactly one of --env, --stdin, or --prompt is required")
-			}
-
-			cfg, paths, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			switch {
-			case envName != "":
-				cfg.Upstream.APIKeySource = "env"
-				cfg.Upstream.APIKeyEnv = envName
-				cfg.Upstream.APIKey = ""
-			case readStdin:
-				key, err := readKeyFromStdin(stdin)
-				if err != nil {
-					return err
-				}
-				cfg.Upstream.APIKeySource = "inline"
-				cfg.Upstream.APIKeyEnv = ""
-				cfg.Upstream.APIKey = key
-			case prompt:
-				if _, err := fmt.Fprint(cmd.ErrOrStderr(), "API key: "); err != nil {
-					return err
-				}
-				key, err := readKeyLine(stdin)
-				if err != nil {
-					return err
-				}
-				cfg.Upstream.APIKeySource = "inline"
-				cfg.Upstream.APIKeyEnv = ""
-				cfg.Upstream.APIKey = key
-			}
-			if err := config.Save(paths.ConfigFile, cfg); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), "upstream API key updated")
-			return err
-		},
-	}
-	setKeyCmd.Flags().StringVar(&envName, "env", "", "environment variable containing upstream API key")
-	setKeyCmd.Flags().BoolVar(&readStdin, "stdin", false, "read upstream API key from stdin")
-	setKeyCmd.Flags().BoolVar(&prompt, "prompt", false, "prompt for upstream API key")
-
-	return setKeyCmd
-}
-
-func newUpstreamTestCommand() *cobra.Command {
-	var testPath string
-
-	testCmd := &cobra.Command{
-		Use:   "test",
-		Short: "Test upstream connectivity without printing secrets",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			if cfg.Upstream.BaseURL == "" {
-				return fmt.Errorf("upstream base_url is not configured")
-			}
-			key, err := resolveUpstreamKey(cfg)
-			if err != nil {
-				return err
-			}
-			targetURL, err := joinBaseURLPath(cfg.Upstream.BaseURL, testPath)
-			if err != nil {
-				return err
-			}
-			req, err := http.NewRequest(http.MethodGet, targetURL, nil)
-			if err != nil {
-				return err
-			}
-			if key != "" {
-				req.Header.Set("Authorization", "Bearer "+key)
-			}
-			client := http.Client{Timeout: 5 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Errorf("upstream request failed: %w", err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-				return fmt.Errorf("upstream returned HTTP %d; check upstream API key", resp.StatusCode)
-			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "upstream: %s\npath: %s\nstatus: %d\n", cfg.Upstream.BaseURL, testPath, resp.StatusCode); err != nil {
-				return err
-			}
-			if resp.StatusCode == http.StatusNotFound {
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), "hint: upstream returned 404; if base_url already ends with /v1, try --path /models")
-			}
-			return err
-		},
-	}
-	testCmd.Flags().StringVar(&testPath, "path", "/v1/models", "upstream path to request")
-
-	return testCmd
-}
-
 func loadConfig() (config.Config, config.Paths, error) {
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -334,13 +190,16 @@ func newTokenCommand() *cobra.Command {
 	tokenCmd := &cobra.Command{
 		Use:   "token",
 		Short: "Manage relay tokens",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
 	}
 
 	tokenCmd.AddCommand(
 		newTokenCreateCommand(),
 		newTokenListCommand(),
-		newTokenInspectCommand(),
-		newTokenVerifyCommand(),
+		newTokenShowCommand(),
 		newTokenEnableCommand(true),
 		newTokenEnableCommand(false),
 		newTokenDeleteCommand(),
@@ -351,10 +210,7 @@ func newTokenCommand() *cobra.Command {
 }
 
 func newTokenCreateCommand() *cobra.Command {
-	var name string
-	var note string
-
-	createCmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "create <key-id>",
 		Short: "Create relay token",
 		Args:  cobra.ExactArgs(1),
@@ -371,7 +227,7 @@ func newTokenCreateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			records = append(records, tokenstore.NewRecordWithMetadata(keyID, token, time.Now(), name, note))
+			records = append(records, tokenstore.NewRecord(keyID, token, time.Now()))
 			if err := store.Save(records); err != nil {
 				return err
 			}
@@ -379,10 +235,6 @@ func newTokenCreateCommand() *cobra.Command {
 			return err
 		},
 	}
-	createCmd.Flags().StringVar(&name, "name", "", "human-readable token name")
-	createCmd.Flags().StringVar(&note, "note", "", "human-readable token note")
-
-	return createCmd
 }
 
 func newTokenListCommand() *cobra.Command {
@@ -399,20 +251,18 @@ func newTokenListCommand() *cobra.Command {
 				_, err := fmt.Fprintln(cmd.OutOrStdout(), "no tokens")
 				return err
 			}
-			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "key-id\tname\tnote\tenabled\tcreated-at\trotated-at\ttoken-hash-prefix"); err != nil {
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "key-id\tenabled\tcreated-at\trotated-at\ttoken"); err != nil {
 				return err
 			}
 			for _, record := range records {
 				_, err := fmt.Fprintf(
 					cmd.OutOrStdout(),
-					"%s\t%s\t%s\t%t\t%s\t%s\t%s\n",
+					"%s\t%t\t%s\t%s\t%s\n",
 					record.KeyID,
-					record.Name,
-					record.Note,
 					record.Enabled,
 					record.CreatedAt,
 					record.RotatedAt,
-					tokenHashPrefix(record.TokenHash),
+					tokenDisplay(record),
 				)
 				if err != nil {
 					return err
@@ -423,10 +273,10 @@ func newTokenListCommand() *cobra.Command {
 	}
 }
 
-func newTokenInspectCommand() *cobra.Command {
+func newTokenShowCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "inspect <key-id>",
-		Short: "Inspect relay token metadata",
+		Use:   "show <key-id>",
+		Short: "Show relay token",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, records, err := loadTokenRecords()
@@ -439,53 +289,16 @@ func newTokenInspectCommand() *cobra.Command {
 			}
 			_, err = fmt.Fprintf(
 				cmd.OutOrStdout(),
-				"key-id: %s\nname: %s\nnote: %s\nenabled: %t\ncreated-at: %s\nrotated-at: %s\ntoken-hash-prefix: %s\n",
+				"key-id: %s\nenabled: %t\ncreated-at: %s\nrotated-at: %s\ntoken: %s\n",
 				record.KeyID,
-				record.Name,
-				record.Note,
 				record.Enabled,
 				record.CreatedAt,
 				record.RotatedAt,
-				tokenHashPrefix(record.TokenHash),
+				tokenDisplay(record),
 			)
 			return err
 		},
 	}
-}
-
-func newTokenVerifyCommand() *cobra.Command {
-	var fromStdin bool
-
-	verifyCmd := &cobra.Command{
-		Use:   "verify <key-id>",
-		Short: "Verify a relay token against local store",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if !fromStdin {
-				return fmt.Errorf("use --stdin to read a token for verification")
-			}
-			_, records, err := loadTokenRecords()
-			if err != nil {
-				return err
-			}
-			_, record, err := tokenstore.Find(records, args[0])
-			if err != nil {
-				return err
-			}
-			token, err := readKeyFromStdin(cmd.InOrStdin())
-			if err != nil {
-				return err
-			}
-			if !tokenstore.RecordMatchesToken(record, token) {
-				return fmt.Errorf("token is invalid")
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), "token: valid")
-			return err
-		},
-	}
-	verifyCmd.Flags().BoolVar(&fromStdin, "stdin", false, "read relay token from stdin")
-
-	return verifyCmd
 }
 
 func newTokenEnableCommand(enable bool) *cobra.Command {
@@ -581,6 +394,13 @@ func tokenHashPrefix(hash string) string {
 	return hash[:16]
 }
 
+func tokenDisplay(record tokenstore.Record) string {
+	if record.Token != "" {
+		return record.Token
+	}
+	return "<legacy hash-only token; rotate to show plaintext>"
+}
+
 func loadTokenRecords() (*tokenstore.Store, []tokenstore.Record, error) {
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -667,7 +487,10 @@ func newSetupCommand(stdin io.Reader) *cobra.Command {
 				return err
 			}
 			reader := bufio.NewReader(stdin)
-			baseURL, err := promptLine(cmd.ErrOrStderr(), reader, "upstream base_url: ")
+			if err := printSetupSummary(cmd.OutOrStdout(), cfg); err != nil {
+				return err
+			}
+			baseURL, err := promptConfigString(cmd.ErrOrStderr(), reader, "upstream base_url", cfg.Upstream.BaseURL)
 			if err != nil {
 				return err
 			}
@@ -678,7 +501,7 @@ func newSetupCommand(stdin io.Reader) *cobra.Command {
 				}
 				cfg.Upstream.BaseURL = normalized
 			}
-			apiKey, err := promptLine(cmd.ErrOrStderr(), reader, "upstream API key: ")
+			apiKey, err := promptSecret(cmd.ErrOrStderr(), reader, "upstream API key", cfg.Upstream.APIKey != "" || cfg.Upstream.APIKeySource == "env")
 			if err != nil {
 				return err
 			}
@@ -741,17 +564,87 @@ func newSetupCommand(stdin io.Reader) *cobra.Command {
 				return err
 			}
 			if strings.ToLower(remoteAccess) == "cloudflare" {
-				token, err := promptLine(cmd.ErrOrStderr(), reader, "Cloudflare tunnel token: ")
-				if err != nil {
-					return err
-				}
-				if token == "" {
-					return fmt.Errorf("Cloudflare tunnel token is required")
-				}
-				return installCloudflaredService(token)
+				return maybeInstallCloudflaredService(cmd.ErrOrStderr(), reader)
 			}
 			return nil
 		},
+	}
+}
+
+func printSetupSummary(out io.Writer, cfg config.Config) error {
+	if _, err := fmt.Fprintln(out, "current configuration:"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "  listen_addr: %s\n", emptyDisplay(cfg.ListenAddr)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "  public_url: %s\n", emptyDisplay(cfg.PublicURL)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "  upstream base_url: %s\n", emptyDisplay(cfg.Upstream.BaseURL)); err != nil {
+		return err
+	}
+	keyState := "not configured"
+	if cfg.Upstream.APIKeySource == "env" && cfg.Upstream.APIKeyEnv != "" {
+		keyState = "env:" + cfg.Upstream.APIKeyEnv
+	} else if cfg.Upstream.APIKey != "" {
+		keyState = "inline configured"
+	}
+	if _, err := fmt.Fprintf(out, "  upstream API key: %s\n", keyState); err != nil {
+		return err
+	}
+	if cfg.Tunnel.Enabled {
+		_, err := fmt.Fprintf(out, "  ssh-tunnel: enabled (%s:%s)\n", cfg.Tunnel.RemoteHost, cfg.Tunnel.RemotePort)
+		return err
+	}
+	_, err := fmt.Fprintln(out, "  ssh-tunnel: disabled")
+	return err
+}
+
+func emptyDisplay(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "<not configured>"
+	}
+	return value
+}
+
+func promptConfigString(out io.Writer, reader *bufio.Reader, label string, current string) (string, error) {
+	if current == "" {
+		return promptLine(out, reader, label+": ")
+	}
+	update, err := promptYesNo(out, reader, fmt.Sprintf("%s is %s; update? [y/N]: ", label, current), false)
+	if err != nil || !update {
+		return "", err
+	}
+	return promptLine(out, reader, "new "+label+": ")
+}
+
+func promptSecret(out io.Writer, reader *bufio.Reader, label string, configured bool) (string, error) {
+	if !configured {
+		return promptLine(out, reader, label+": ")
+	}
+	update, err := promptYesNo(out, reader, label+" is configured; update? [y/N]: ", false)
+	if err != nil || !update {
+		return "", err
+	}
+	return promptLine(out, reader, "new "+label+": ")
+}
+
+func promptYesNo(out io.Writer, reader *bufio.Reader, prompt string, defaultYes bool) (bool, error) {
+	answer, err := promptLine(out, reader, prompt)
+	if err != nil {
+		return false, err
+	}
+	if answer == "" {
+		return defaultYes, nil
+	}
+	switch strings.ToLower(answer) {
+	case "y", "yes":
+		return true, nil
+	case "n", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("answer must be yes or no")
 	}
 }
 
@@ -814,6 +707,62 @@ func installCloudflaredService(token string) error {
 	return nil
 }
 
+func maybeInstallCloudflaredService(out io.Writer, reader *bufio.Reader) error {
+	if cloudflaredServiceInstalled() {
+		update, err := promptYesNo(out, reader, "Cloudflare connector is already installed; update token? [y/N]: ", false)
+		if err != nil || !update {
+			return err
+		}
+		token, err := promptLine(out, reader, "Cloudflare tunnel token: ")
+		if err != nil {
+			return err
+		}
+		if token == "" {
+			return fmt.Errorf("Cloudflare tunnel token is required")
+		}
+		return reinstallCloudflaredService(token)
+	}
+	token, err := promptLine(out, reader, "Cloudflare tunnel token: ")
+	if err != nil {
+		return err
+	}
+	if token == "" {
+		return fmt.Errorf("Cloudflare tunnel token is required")
+	}
+	return installCloudflaredService(token)
+}
+
+func cloudflaredServiceInstalled() bool {
+	if setupGOOS() != "darwin" {
+		return false
+	}
+	out, err := setupExternalRunner.Run("cloudflared", "--version")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return false
+	}
+	if _, err := setupExternalRunner.Run("launchctl", "print", "system/com.cloudflare.cloudflared"); err == nil {
+		return true
+	}
+	if _, err := setupExternalRunner.Run("launchctl", "print", "gui/"+fmt.Sprint(os.Getuid())+"/com.cloudflare.cloudflared"); err == nil {
+		return true
+	}
+	return false
+}
+
+func reinstallCloudflaredService(token string) error {
+	if setupGOOS() != "darwin" {
+		return fmt.Errorf("cloudflared service auto-install is only supported on macOS; install cloudflared manually and run cloudflared service install <TUNNEL_TOKEN>")
+	}
+	_, _ = setupExternalRunner.Run("sudo", "cloudflared", "service", "uninstall")
+	if _, err := setupExternalRunner.Run("sudo", "cloudflared", "service", "install", token); err != nil {
+		return fmt.Errorf("sudo failed: %w", err)
+	}
+	if _, err := setupExternalRunner.Run("sudo", "launchctl", "start", "com.cloudflare.cloudflared"); err != nil {
+		return fmt.Errorf("sudo failed: %w", err)
+	}
+	return nil
+}
+
 func promptLine(out io.Writer, reader *bufio.Reader, prompt string) (string, error) {
 	if _, err := fmt.Fprint(out, prompt); err != nil {
 		return "", err
@@ -826,19 +775,22 @@ func promptLine(out io.Writer, reader *bufio.Reader, prompt string) (string, err
 }
 
 func newVersionCommand() *cobra.Command {
-	return &cobra.Command{
+	var verbose bool
+	versionCmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), versionString(Version, Commit, BuildDate))
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), versionString(Version, Commit, BuildDate, verbose))
 			return err
 		},
 	}
+	versionCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print build metadata")
+	return versionCmd
 }
 
-func versionString(version string, commit string, buildDate string) string {
-	if commit == "" && buildDate == "" {
+func versionString(version string, commit string, buildDate string, verbose bool) string {
+	if !verbose || (commit == "" && buildDate == "") {
 		return version
 	}
 	var lines []string
@@ -895,17 +847,153 @@ func newConfigCommand(stdin io.Reader) *cobra.Command {
 			if err := validateConfig(paths, cfg); err != nil {
 				return err
 			}
+			for _, key := range config.UnknownKeys(cfg) {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "warning: unknown config key %s\n", key); err != nil {
+					return err
+				}
+			}
 			_, err = fmt.Fprintln(cmd.OutOrStdout(), "config: ok")
 			return err
 		},
 	})
 	configCmd.AddCommand(
-		newUpstreamSetURLCommand(),
-		newUpstreamSetKeyCommand(stdin),
-		newUpstreamTestCommand(),
+		newConfigSetCommand(stdin),
 	)
 
 	return configCmd
+}
+
+func newConfigSetCommand(stdin io.Reader) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set <key> [value]",
+		Short: "Set a local configuration value",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := strings.TrimSpace(args[0])
+			if key == "" || strings.Contains(key, "..") || strings.HasPrefix(key, ".") || strings.HasSuffix(key, ".") {
+				return fmt.Errorf("config key must be a dotted path")
+			}
+			var rawValue string
+			var err error
+			if len(args) == 2 {
+				rawValue = args[1]
+				if rawValue == "-" {
+					rawValue, err = readKeyFromStdin(stdin)
+					if err != nil {
+						return err
+					}
+				}
+			} else {
+				if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: ", key); err != nil {
+					return err
+				}
+				rawValue, err = readKeyLine(stdin)
+				if err != nil {
+					return err
+				}
+			}
+			cfg, paths, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if err := setConfigValue(&cfg, key, rawValue); err != nil {
+				return err
+			}
+			if err := config.Save(paths.ConfigFile, cfg); err != nil {
+				return err
+			}
+			if key == "upstream.api_key" {
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), "upstream.api_key: updated")
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", key, displayConfigSetValue(rawValue))
+			return err
+		},
+	}
+}
+
+func setConfigValue(cfg *config.Config, key string, rawValue string) error {
+	if cfg.Extra == nil {
+		cfg.Extra = map[string]any{}
+	}
+	switch key {
+	case "listen_addr":
+		cfg.ListenAddr = rawValue
+	case "public_url":
+		value, err := normalizeBaseURL(rawValue)
+		if err != nil {
+			return err
+		}
+		cfg.PublicURL = value
+	case "upstream.base_url":
+		value, err := normalizeBaseURL(rawValue)
+		if err != nil {
+			return err
+		}
+		cfg.Upstream.BaseURL = value
+	case "upstream.api_key":
+		if strings.TrimSpace(rawValue) == "" {
+			return fmt.Errorf("API key is empty")
+		}
+		cfg.Upstream.APIKeySource = "inline"
+		cfg.Upstream.APIKeyEnv = ""
+		cfg.Upstream.APIKey = strings.TrimSpace(rawValue)
+	case "upstream.api_key_env":
+		if strings.TrimSpace(rawValue) == "" {
+			return fmt.Errorf("API key environment variable is empty")
+		}
+		cfg.Upstream.APIKeySource = "env"
+		cfg.Upstream.APIKeyEnv = strings.TrimSpace(rawValue)
+		cfg.Upstream.APIKey = ""
+	case "upstream.api_key_source":
+		cfg.Upstream.APIKeySource = rawValue
+	case "tunnel.enabled":
+		value, err := parseConfigBool(rawValue)
+		if err != nil {
+			return err
+		}
+		cfg.Tunnel.Enabled = value
+	case "tunnel.ssh_host":
+		cfg.Tunnel.SSHHost = rawValue
+	case "tunnel.ssh_user":
+		cfg.Tunnel.SSHUser = rawValue
+	case "tunnel.ssh_port":
+		cfg.Tunnel.SSHPort = rawValue
+	case "tunnel.remote_host":
+		cfg.Tunnel.RemoteHost = rawValue
+	case "tunnel.remote_port":
+		cfg.Tunnel.RemotePort = rawValue
+	default:
+		cfg.Extra[key] = parseConfigValue(rawValue)
+		return nil
+	}
+	delete(cfg.Extra, key)
+	return nil
+}
+
+func parseConfigValue(value string) any {
+	if parsed, err := parseConfigBool(value); err == nil {
+		return parsed
+	}
+	return value
+}
+
+func parseConfigBool(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("boolean value must be true or false")
+	}
+}
+
+func displayConfigSetValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "<empty>"
+	}
+	return value
 }
 
 func validateConfig(paths config.Paths, cfg config.Config) error {
@@ -916,7 +1004,7 @@ func validateConfig(paths config.Paths, cfg config.Config) error {
 		return fmt.Errorf("listen_addr is empty")
 	}
 	if cfg.Upstream.BaseURL == "" {
-		return fmt.Errorf("upstream base_url is not configured; run llmrelay config set-url <base-url>")
+		return fmt.Errorf("upstream base_url is not configured; run llmrelay config set upstream.base_url <base-url>")
 	}
 	if _, err := normalizeBaseURL(cfg.Upstream.BaseURL); err != nil {
 		return err
@@ -1009,77 +1097,202 @@ func newServeCommand() *cobra.Command {
 }
 
 func newRelayTestCommand() *cobra.Command {
-	var baseURL string
-	var keyID string
-	var testPath string
-
 	testCmd := &cobra.Command{
 		Use:   "test",
-		Short: "Test the relay endpoint with a local relay token",
+		Short: "Test upstream, local relay, and public relay endpoints",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, paths, err := loadConfig()
 			if err != nil {
 				return err
 			}
-			store := tokenstore.New(paths.TokenFile)
-			records, err := store.Load()
-			if err != nil {
+			if err := runUpstreamTest(cmd.OutOrStdout(), cfg); err != nil {
 				return err
 			}
-			selected, err := selectRelayTestToken(records, keyID)
-			if err != nil {
+			if err := runRelayTest(cmd.OutOrStdout(), cfg, paths, "local", ""); err != nil {
 				return err
 			}
-			if baseURL == "" {
-				baseURL, err = relayLocalBaseURL(cfg.ListenAddr)
-				if err != nil {
-					return err
-				}
+			if strings.TrimSpace(cfg.PublicURL) != "" {
+				return runRelayTest(cmd.OutOrStdout(), cfg, paths, "public", cfg.PublicURL)
 			}
-			targetURL, err := joinRelayBaseURLPath(baseURL, testPath)
-			if err != nil {
-				return err
-			}
-			req, err := http.NewRequest(http.MethodGet, targetURL, nil)
-			if err != nil {
-				return err
-			}
-			req.Header.Set("Authorization", "Bearer "+selected.Token)
-			client := http.Client{Timeout: 5 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Errorf("relay request failed; run llmrelay start and retry: %w", err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusUnauthorized {
-				return fmt.Errorf("relay returned HTTP 401; selected relay token was rejected")
-			}
-			if resp.StatusCode == http.StatusForbidden {
-				return fmt.Errorf("relay returned HTTP 403; selected relay token is disabled")
-			}
-			if resp.StatusCode == http.StatusBadGateway {
-				return fmt.Errorf("relay returned HTTP 502; run llmrelay config test --path /models to check upstream")
-			}
-			openAIBase, anthropicBase, err := relayClientBaseURLs(baseURL)
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			if _, err := fmt.Fprintf(out, "relay: ok\nurl: %s\nstatus: %d\nkey-id: %s\n\n", targetURL, resp.StatusCode, selected.KeyID); err != nil {
-				return err
-			}
-			if _, err := fmt.Fprintf(out, "OpenAI-compatible base_url:\n  %s\n\n", openAIBase); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(out, "Anthropic-compatible base_url:\n  %s\n", anthropicBase)
-			return err
+			return nil
 		},
 	}
-	testCmd.Flags().StringVar(&baseURL, "url", "", "relay base URL to test")
-	testCmd.Flags().StringVar(&keyID, "key-id", "", "relay token key-id to use")
-	testCmd.Flags().StringVar(&testPath, "path", "/v1/models", "relay path to request")
+	testCmd.AddCommand(&cobra.Command{
+		Use:   "upstream",
+		Short: "Test upstream connectivity",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return runUpstreamTest(cmd.OutOrStdout(), cfg)
+		},
+	})
+	testCmd.AddCommand(&cobra.Command{
+		Use:   "local",
+		Short: "Test the local relay endpoint",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, paths, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return runRelayTest(cmd.OutOrStdout(), cfg, paths, "local", "")
+		},
+	})
+	testCmd.AddCommand(&cobra.Command{
+		Use:   "public [url]",
+		Short: "Test the public relay endpoint",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, paths, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			baseURL := cfg.PublicURL
+			if len(args) == 1 {
+				baseURL = args[0]
+			}
+			if strings.TrimSpace(baseURL) == "" {
+				return fmt.Errorf("public_url is not configured; run llmrelay config set public_url <url>")
+			}
+			return runRelayTest(cmd.OutOrStdout(), cfg, paths, "public", baseURL)
+		},
+	})
 	return testCmd
+}
+
+func runUpstreamTest(out io.Writer, cfg config.Config) error {
+	if cfg.Upstream.BaseURL == "" {
+		return fmt.Errorf("upstream base_url is not configured")
+	}
+	key, err := resolveUpstreamKey(cfg)
+	if err != nil {
+		return err
+	}
+	resp, targetURL, err := requestFirstOK(cfg.Upstream.BaseURL, upstreamCandidatePaths(cfg.Upstream.BaseURL), key)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("upstream returned HTTP %d; check upstream API key", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("upstream returned HTTP 404 after trying /models and /v1/models")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
+	}
+	_, err = fmt.Fprintf(out, "upstream: ok\nurl: %s\nstatus: %d\n\n", targetURL, resp.StatusCode)
+	return err
+}
+
+func requestFirstOK(baseURL string, paths []string, bearerToken string) (*http.Response, string, error) {
+	client := http.Client{Timeout: 5 * time.Second}
+	var lastResp *http.Response
+	var lastURL string
+	for _, path := range paths {
+		targetURL, err := joinBaseURLPath(baseURL, path)
+		if err != nil {
+			return nil, "", err
+		}
+		req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+		if err != nil {
+			return nil, "", err
+		}
+		if bearerToken != "" {
+			req.Header.Set("Authorization", "Bearer "+bearerToken)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, "", fmt.Errorf("upstream request failed: %w", err)
+		}
+		if lastResp != nil {
+			_ = lastResp.Body.Close()
+		}
+		lastResp = resp
+		lastURL = targetURL
+		if resp.StatusCode != http.StatusNotFound {
+			return resp, targetURL, nil
+		}
+	}
+	return lastResp, lastURL, nil
+}
+
+func upstreamCandidatePaths(baseURL string) []string {
+	parsed, err := url.Parse(baseURL)
+	if err == nil && strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/v1") {
+		return []string{"/models", "/v1/models"}
+	}
+	return []string{"/v1/models", "/models"}
+}
+
+func runRelayTest(out io.Writer, cfg config.Config, paths config.Paths, label string, baseURL string) error {
+	store := tokenstore.New(paths.TokenFile)
+	records, err := store.Load()
+	if err != nil {
+		return err
+	}
+	selected, err := selectRelayTestToken(records, "")
+	if err != nil {
+		return err
+	}
+	if baseURL == "" {
+		baseURL, err = relayLocalBaseURL(cfg.ListenAddr)
+		if err != nil {
+			return err
+		}
+	}
+	resp, targetURL, err := requestRelay(baseURL, selected.Token)
+	if err != nil {
+		return fmt.Errorf("%s relay request failed; run llmrelay start and retry: %w", label, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("%s relay returned HTTP 401; selected relay token was rejected", label)
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("%s relay returned HTTP 403; selected relay token is disabled", label)
+	}
+	if resp.StatusCode == http.StatusBadGateway {
+		return fmt.Errorf("%s relay returned HTTP 502; run llmrelay test upstream to check upstream", label)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s relay returned HTTP %d", label, resp.StatusCode)
+	}
+	openAIBase, anthropicBase, err := relayClientBaseURLs(baseURL)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "relay: ok\nscope: %s\nurl: %s\nstatus: %d\nkey-id: %s\n\n", label, targetURL, resp.StatusCode, selected.KeyID); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "OpenAI-compatible base_url:\n  %s\n\n", openAIBase); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "Anthropic-compatible base_url:\n  %s\n", anthropicBase)
+	return err
+}
+
+func requestRelay(baseURL string, relayToken string) (*http.Response, string, error) {
+	targetURL, err := joinRelayBaseURLPath(baseURL, "/v1/models")
+	if err != nil {
+		return nil, "", err
+	}
+	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+relayToken)
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, targetURL, nil
 }
 
 func selectRelayTestToken(records []tokenstore.Record, keyID string) (tokenstore.Record, error) {

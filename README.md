@@ -18,16 +18,22 @@ llmrelay setup
 llmrelay version
 llmrelay config show
 llmrelay config validate
-llmrelay config set-url https://api.example.test/v1
-llmrelay config set-key --stdin
-llmrelay config test --path /models
+llmrelay config set upstream.base_url https://api.example.test/v1
+llmrelay config set upstream.api_key
+llmrelay config set upstream.api_key -
+llmrelay config set upstream.api_key_env OPENAI_API_KEY
+llmrelay config set listen_addr 127.0.0.1:18080
+llmrelay config set public_url https://llm.example.test
 llmrelay token create local
 llmrelay token list
-llmrelay token inspect local
-llmrelay token verify local --stdin
+llmrelay token show local
 llmrelay doctor
 llmrelay serve
 llmrelay test
+llmrelay test upstream
+llmrelay test local
+llmrelay test public
+llmrelay test public https://llm.example.test
 llmrelay start
 llmrelay stop
 llmrelay restart
@@ -47,24 +53,25 @@ chmod +x ./llmrelay-darwin-arm64
 
 The installer copies the binary to `~/Library/Application Support/llmrelay/bin/llmrelay`, creates a `~/.local/bin/llmrelay` command link, initializes `~/.llmrelay/config.toml` and `~/.llmrelay/tokens.json` if missing, updates `~/.zshrc` for PATH and zsh completion, and preserves existing config and token files.
 
-Run the first-time setup wizard to configure one upstream and create a relay token:
+Run the setup wizard to configure one upstream and create a relay token. The wizard is safe to run again: existing values are shown first and are kept unless you choose to update them.
 
 ```sh
 llmrelay setup
 ```
 
-Or configure it with scriptable commands. If the upstream base URL already includes `/v1`, test `/models`; otherwise test `/v1/models`:
+Or configure it with scriptable commands:
 
 ```sh
-llmrelay config set-url https://api.example.test/v1
-printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay config set-key --stdin
-llmrelay config test --path /models
+llmrelay config set upstream.base_url https://api.example.test/v1
+printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay config set upstream.api_key -
+llmrelay test upstream
 ```
 
 Create additional relay tokens as needed. `tokens.json` stores relay tokens in plaintext, so keep that file private:
 
 ```sh
-llmrelay token create local --name "Local client"
+llmrelay token create local
+llmrelay token show local
 ```
 
 Run the relay in the foreground:
@@ -83,6 +90,7 @@ llmrelay test
 ```
 
 On macOS, `llmrelay start` uses a user LaunchAgent so the relay starts again when you log in. `llmrelay stop` unloads that LaunchAgent.
+If `llmrelay start` is run while the service is already running, it reports `already running` and does not restart the process. Use `llmrelay restart` when you explicitly want to stop and start the service.
 
 ## Configuration
 
@@ -90,6 +98,7 @@ The default configuration file is `~/.llmrelay/config.toml`. It uses TOML syntax
 
 ```toml
 listen_addr = "0.0.0.0:18080"
+public_url = "https://llm.example.test"
 
 [upstream]
 base_url = "https://api.example.test/v1"
@@ -106,7 +115,7 @@ remote_host = "127.0.0.1"
 remote_port = "18080"
 ```
 
-`tokens.json` is managed by `llmrelay token ...` commands. Relay tokens are stored in plaintext in that local file, with SHA-256 hashes kept for compatibility and verification. Keep this file private. Process output is appended to `~/.llmrelay/llmrelay.log`; non-macOS background runs also write `~/.llmrelay/llmrelay.pid`.
+`tokens.json` is managed by `llmrelay token ...` commands. Relay tokens are stored in plaintext in that local file and are printed by `llmrelay token list` and `llmrelay token show <key-id>`. Keep this file and command output private. Process output is appended to `~/.llmrelay/llmrelay.log`; non-macOS background runs also write `~/.llmrelay/llmrelay.pid`.
 
 Example token store:
 
@@ -114,8 +123,6 @@ Example token store:
 [
   {
     "key_id": "local",
-    "name": "Local client",
-    "note": "",
     "token": "llmr_xxx",
     "token_hash": "sha256:<hex>",
     "created_at": "2026-06-10T00:00:00Z",
@@ -157,7 +164,7 @@ TUNNEL_TOKEN=<cloudflare-tunnel-token>
 PUBLIC_URL=https://llm.example.test
 ```
 
-During `llmrelay setup`, choose the default Cloudflare remote access flow and paste the tunnel token. On macOS, setup installs and starts the `cloudflared` service:
+During `llmrelay setup`, choose the default Cloudflare remote access flow and paste the tunnel token. On macOS, setup installs and starts the `cloudflared` service if it is not already installed:
 
 ```sh
 brew install cloudflared
@@ -172,10 +179,13 @@ The token is not stored in `config.toml`. Cloudflare Tunnel does not use the `[t
 enabled = false
 ```
 
-Test the public entry from the relay host:
+If `cloudflared` is already installed and loaded, `setup` skips reinstalling it by default. Choose update only when you want to replace the connector token.
+
+Save the public URL and test the public entry from the relay host:
 
 ```sh
-llmrelay test --url https://llm.example.test
+llmrelay config set public_url https://llm.example.test
+llmrelay test public
 ```
 
 OpenAI-compatible clients usually use:
@@ -259,7 +269,14 @@ Run the CLI from source:
 go run ./cmd/llmrelay version
 ```
 
-Build cross-platform single-file binaries. The default source-build version is `v0.0.0`; pass `VERSION=...` for release builds. The build strips Go symbols with linker flags and does not use UPX:
+`llmrelay version` prints only the version for normal use. Build metadata is available when troubleshooting:
+
+```sh
+llmrelay version -v
+llmrelay version --verbose
+```
+
+Build cross-platform single-file binaries. The default source-build version is `v0.0.0`; pass `VERSION=...` for release builds. The build strips Go symbols with linker flags and does not use UPX. Build date defaults to the current UTC time:
 
 ```sh
 make build
@@ -274,7 +291,6 @@ make build VERSION=v0.1.0
 Release outputs:
 
 ```text
-dist/llmrelay-linux-amd64
 dist/llmrelay-linux-amd64
 dist/llmrelay-linux-arm64
 dist/llmrelay-windows-amd64.exe

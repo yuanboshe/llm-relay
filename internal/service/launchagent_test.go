@@ -17,7 +17,7 @@ func (f *fakeCommandRunner) Run(name string, args ...string) (string, error) {
 	return f.output, nil
 }
 
-func TestLaunchAgentStartWritesPlistAndRunsLaunchctl(t *testing.T) {
+func TestLaunchAgentStartWritesPlistAndRunsLaunchctlWhenStopped(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeCommandRunner{}
 	manager := LaunchAgentManager{
@@ -54,13 +54,44 @@ func TestLaunchAgentStartWritesPlistAndRunsLaunchctl(t *testing.T) {
 		}
 	}
 	wantCalls := []string{
+		"launchctl print gui/501/com.yuanboshe.llmrelay",
 		"launchctl bootout gui/501/com.yuanboshe.llmrelay",
 		"launchctl bootstrap gui/501 " + manager.PlistPath,
-		"launchctl kickstart -k gui/501/com.yuanboshe.llmrelay",
+		"launchctl kickstart gui/501/com.yuanboshe.llmrelay",
 		"launchctl print gui/501/com.yuanboshe.llmrelay",
 	}
 	if strings.Join(runner.calls, "\n") != strings.Join(wantCalls, "\n") {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, wantCalls)
+	}
+}
+
+func TestLaunchAgentStartDoesNotRestartAlreadyRunningService(t *testing.T) {
+	runner := &fakeCommandRunner{output: `gui/501/com.yuanboshe.llmrelay = {
+	active count = 1
+	pid = 4321
+}`}
+	manager := LaunchAgentManager{
+		Label:      "com.yuanboshe.llmrelay",
+		UID:        501,
+		PlistPath:  filepath.Join(t.TempDir(), "com.yuanboshe.llmrelay.plist"),
+		Executable: "llmrelay",
+		LogFile:    filepath.Join(t.TempDir(), "llmrelay.log"),
+		Runner:     runner,
+	}
+
+	status, err := manager.Start()
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if status.State != StateRunning || status.PID != 4321 {
+		t.Fatalf("status = %#v, want running pid 4321", status)
+	}
+	if status.Message != "already running" {
+		t.Fatalf("message = %q, want already running", status.Message)
+	}
+	wantCalls := []string{"launchctl print gui/501/com.yuanboshe.llmrelay"}
+	if strings.Join(runner.calls, "\n") != strings.Join(wantCalls, "\n") {
+		t.Fatalf("calls = %#v, want only status check", runner.calls)
 	}
 }
 

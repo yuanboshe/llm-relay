@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -46,8 +49,10 @@ type Tunnel struct {
 // Config contains relay runtime settings.
 type Config struct {
 	ListenAddr string
+	PublicURL  string
 	Upstream   Upstream
 	Tunnel     Tunnel
+	Extra      map[string]any
 }
 
 // DefaultPaths returns the standard configuration paths under the user home directory.
@@ -81,6 +86,7 @@ func DefaultPaths() (Paths, error) {
 func DefaultConfig() Config {
 	return Config{
 		ListenAddr: "127.0.0.1:18080",
+		PublicURL:  "",
 		Upstream:   Upstream{},
 		Tunnel: Tunnel{
 			Enabled:    false,
@@ -158,90 +164,32 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		return Config{}, err
+	}
+
 	cfg := DefaultConfig()
-	section := ""
-	for _, rawLine := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.Trim(line, "[]")
-			continue
-		}
-
-		key, rawValue, ok := strings.Cut(line, "=")
-		if !ok {
-			return Config{}, fmt.Errorf("invalid config line: %s", line)
-		}
-		key = strings.TrimSpace(key)
-		rawValue = strings.TrimSpace(rawValue)
-
-		switch section {
-		case "":
-			if key == "listen_addr" {
-				value, err := parseStringValue(rawValue)
-				if err != nil {
-					return Config{}, err
-				}
-				cfg.ListenAddr = value
-			}
-		case "upstream":
-			value, err := parseStringValue(rawValue)
-			if err != nil {
-				return Config{}, err
-			}
-			switch key {
-			case "base_url":
-				cfg.Upstream.BaseURL = value
-			case "api_key_source":
-				cfg.Upstream.APIKeySource = value
-			case "api_key_env":
-				cfg.Upstream.APIKeyEnv = value
-			case "api_key":
-				cfg.Upstream.APIKey = value
-			}
-		case "tunnel":
-			switch key {
-			case "enabled":
-				value, err := parseBoolValue(rawValue)
-				if err != nil {
-					return Config{}, err
-				}
-				cfg.Tunnel.Enabled = value
-			case "ssh_host":
-				value, err := parseStringValue(rawValue)
-				if err != nil {
-					return Config{}, err
-				}
-				cfg.Tunnel.SSHHost = value
-			case "ssh_user":
-				value, err := parseStringValue(rawValue)
-				if err != nil {
-					return Config{}, err
-				}
-				cfg.Tunnel.SSHUser = value
-			case "ssh_port":
-				value, err := parseStringValue(rawValue)
-				if err != nil {
-					return Config{}, err
-				}
-				cfg.Tunnel.SSHPort = value
-			case "remote_host":
-				value, err := parseStringValue(rawValue)
-				if err != nil {
-					return Config{}, err
-				}
-				cfg.Tunnel.RemoteHost = value
-			case "remote_port":
-				value, err := parseStringValue(rawValue)
-				if err != nil {
-					return Config{}, err
-				}
-				cfg.Tunnel.RemotePort = value
-			}
-		default:
-			return Config{}, fmt.Errorf("unknown config section: %s", section)
+	cfg.Extra = map[string]any{}
+	cfg.ListenAddr = getString(doc, "listen_addr", cfg.ListenAddr)
+	cfg.PublicURL = getString(doc, "public_url", cfg.PublicURL)
+	if upstream, ok := doc["upstream"].(map[string]any); ok {
+		cfg.Upstream.BaseURL = getString(upstream, "base_url", cfg.Upstream.BaseURL)
+		cfg.Upstream.APIKeySource = getString(upstream, "api_key_source", cfg.Upstream.APIKeySource)
+		cfg.Upstream.APIKeyEnv = getString(upstream, "api_key_env", cfg.Upstream.APIKeyEnv)
+		cfg.Upstream.APIKey = getString(upstream, "api_key", cfg.Upstream.APIKey)
+	}
+	if tunnel, ok := doc["tunnel"].(map[string]any); ok {
+		cfg.Tunnel.Enabled = getBool(tunnel, "enabled", cfg.Tunnel.Enabled)
+		cfg.Tunnel.SSHHost = getString(tunnel, "ssh_host", cfg.Tunnel.SSHHost)
+		cfg.Tunnel.SSHUser = getString(tunnel, "ssh_user", cfg.Tunnel.SSHUser)
+		cfg.Tunnel.SSHPort = getString(tunnel, "ssh_port", cfg.Tunnel.SSHPort)
+		cfg.Tunnel.RemoteHost = getString(tunnel, "remote_host", cfg.Tunnel.RemoteHost)
+		cfg.Tunnel.RemotePort = getString(tunnel, "remote_port", cfg.Tunnel.RemotePort)
+	}
+	for key, value := range flattenMap("", doc) {
+		if !IsKnownKey(key) {
+			cfg.Extra[key] = value
 		}
 	}
 	return cfg, nil
@@ -255,22 +203,48 @@ func Save(path string, cfg Config) error {
 
 // Format returns config.toml text.
 func Format(cfg Config) string {
-	return fmt.Sprintf(`listen_addr = "%s"
-
-[upstream]
-base_url = "%s"
-api_key_source = "%s"
-api_key_env = "%s"
-api_key = "%s"
-
-[tunnel]
-enabled = %t
-ssh_host = "%s"
-ssh_user = "%s"
-ssh_port = "%s"
-remote_host = "%s"
-remote_port = "%s"
-`, escape(cfg.ListenAddr), escape(cfg.Upstream.BaseURL), escape(cfg.Upstream.APIKeySource), escape(cfg.Upstream.APIKeyEnv), escape(cfg.Upstream.APIKey), cfg.Tunnel.Enabled, escape(cfg.Tunnel.SSHHost), escape(cfg.Tunnel.SSHUser), escape(cfg.Tunnel.SSHPort), escape(cfg.Tunnel.RemoteHost), escape(cfg.Tunnel.RemotePort))
+	var b strings.Builder
+	_, _ = fmt.Fprintf(&b, "listen_addr = \"%s\"\n", escape(cfg.ListenAddr))
+	_, _ = fmt.Fprintf(&b, "public_url = \"%s\"\n\n", escape(cfg.PublicURL))
+	_, _ = fmt.Fprintf(&b, "[upstream]\n")
+	_, _ = fmt.Fprintf(&b, "base_url = \"%s\"\n", escape(cfg.Upstream.BaseURL))
+	_, _ = fmt.Fprintf(&b, "api_key_source = \"%s\"\n", escape(cfg.Upstream.APIKeySource))
+	_, _ = fmt.Fprintf(&b, "api_key_env = \"%s\"\n", escape(cfg.Upstream.APIKeyEnv))
+	_, _ = fmt.Fprintf(&b, "api_key = \"%s\"\n\n", escape(cfg.Upstream.APIKey))
+	_, _ = fmt.Fprintf(&b, "[tunnel]\n")
+	_, _ = fmt.Fprintf(&b, "enabled = %t\n", cfg.Tunnel.Enabled)
+	_, _ = fmt.Fprintf(&b, "ssh_host = \"%s\"\n", escape(cfg.Tunnel.SSHHost))
+	_, _ = fmt.Fprintf(&b, "ssh_user = \"%s\"\n", escape(cfg.Tunnel.SSHUser))
+	_, _ = fmt.Fprintf(&b, "ssh_port = \"%s\"\n", escape(cfg.Tunnel.SSHPort))
+	_, _ = fmt.Fprintf(&b, "remote_host = \"%s\"\n", escape(cfg.Tunnel.RemoteHost))
+	_, _ = fmt.Fprintf(&b, "remote_port = \"%s\"\n", escape(cfg.Tunnel.RemotePort))
+	extraBySection := map[string]map[string]any{}
+	for key, value := range cfg.Extra {
+		if !IsKnownKey(key) {
+			section, name := splitExtraKey(key)
+			if extraBySection[section] == nil {
+				extraBySection[section] = map[string]any{}
+			}
+			extraBySection[section][name] = value
+		}
+	}
+	sections := make([]string, 0, len(extraBySection))
+	for section := range extraBySection {
+		sections = append(sections, section)
+	}
+	sort.Strings(sections)
+	for _, section := range sections {
+		_, _ = fmt.Fprintf(&b, "\n[%s]\n", section)
+		names := make([]string, 0, len(extraBySection[section]))
+		for name := range extraBySection[section] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			_, _ = fmt.Fprintf(&b, "%s = %s\n", name, formatExtraValue(extraBySection[section][name]))
+		}
+	}
+	return b.String()
 }
 
 // FormatRedacted returns config.toml text with inline secrets hidden.
@@ -279,6 +253,103 @@ func FormatRedacted(cfg Config) string {
 		cfg.Upstream.APIKey = "<redacted>"
 	}
 	return Format(cfg)
+}
+
+// IsKnownKey reports whether a dotted key is consumed by the runtime.
+func IsKnownKey(key string) bool {
+	switch key {
+	case "listen_addr",
+		"public_url",
+		"upstream.base_url",
+		"upstream.api_key_source",
+		"upstream.api_key_env",
+		"upstream.api_key",
+		"tunnel.enabled",
+		"tunnel.ssh_host",
+		"tunnel.ssh_user",
+		"tunnel.ssh_port",
+		"tunnel.remote_host",
+		"tunnel.remote_port":
+		return true
+	default:
+		return false
+	}
+}
+
+// UnknownKeys returns preserved config keys that are not consumed by the runtime.
+func UnknownKeys(cfg Config) []string {
+	keys := make([]string, 0, len(cfg.Extra))
+	for key := range cfg.Extra {
+		if !IsKnownKey(key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func getString(doc map[string]any, key string, fallback string) string {
+	value, ok := doc[key].(string)
+	if !ok {
+		return fallback
+	}
+	return value
+}
+
+func getBool(doc map[string]any, key string, fallback bool) bool {
+	value, ok := doc[key].(bool)
+	if !ok {
+		return fallback
+	}
+	return value
+}
+
+func flattenMap(prefix string, doc map[string]any) map[string]any {
+	result := map[string]any{}
+	for key, value := range doc {
+		fullKey := key
+		if prefix != "" {
+			fullKey = prefix + "." + key
+		}
+		if nested, ok := value.(map[string]any); ok {
+			for nestedKey, nestedValue := range flattenMap(fullKey, nested) {
+				result[nestedKey] = nestedValue
+			}
+			continue
+		}
+		result[fullKey] = value
+	}
+	return result
+}
+
+func splitExtraKey(key string) (string, string) {
+	section, name, ok := strings.Cut(key, ".")
+	if !ok {
+		return "extra", key
+	}
+	remaining := name
+	for {
+		nextSection, nextName, ok := strings.Cut(remaining, ".")
+		if !ok {
+			return section, remaining
+		}
+		section += "." + nextSection
+		remaining = nextName
+	}
+}
+
+func formatExtraValue(value any) string {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return "true"
+		}
+		return "false"
+	case string:
+		return `"` + escape(typed) + `"`
+	default:
+		return `"` + escape(fmt.Sprint(typed)) + `"`
+	}
 }
 
 func parseStringValue(value string) (string, error) {

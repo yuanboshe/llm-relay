@@ -119,7 +119,13 @@ func (m Manager) Start() (Status, error) {
 		return Status{}, err
 	}
 	if ok && m.controller().IsRunning(current) {
-		return Status{}, fmt.Errorf("llmrelay is already running (pid %d)", current)
+		return Status{
+			State:   StateRunning,
+			PID:     current,
+			PIDFile: m.PIDFile,
+			LogFile: m.LogFile,
+			Message: "already running",
+		}, nil
 	}
 	if ok && !m.controller().IsRunning(current) {
 		_ = os.Remove(m.PIDFile)

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 type buildTarget struct {
@@ -29,7 +30,7 @@ var releaseTargets = []buildTarget{
 func main() {
 	version := flag.String("version", "v0.0.0", "version to embed")
 	commit := flag.String("commit", "unknown", "commit to embed")
-	buildDate := flag.String("date", "unknown", "build date to embed")
+	buildDate := flag.String("date", "", "build date to embed")
 	target := flag.String("target", "", "target in GOOS/GOARCH form")
 	local := flag.Bool("local", false, "build only the current host target")
 	clean := flag.Bool("clean", false, "remove dist and coverage output")
@@ -39,6 +40,9 @@ func main() {
 		must(os.RemoveAll("dist"))
 		_ = os.Remove("coverage.out")
 		return
+	}
+	if *buildDate == "" {
+		*buildDate = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	targets, err := selectTargets(*target, *local)

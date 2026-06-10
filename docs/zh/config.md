@@ -19,6 +19,7 @@ macOS 用户级安装还会使用：
 
 ```toml
 listen_addr = "127.0.0.1:18080"
+public_url = "https://llm.example.test"
 
 [upstream]
 base_url = "https://api.example.test/v1"
@@ -57,9 +58,9 @@ API key 来源支持：
 脚本化配置示例：
 
 ```sh
-llmrelay config set-url https://api.example.test/v1
-llmrelay config set-key --prompt
-llmrelay config test --path /v1/models
+llmrelay config set upstream.base_url https://api.example.test/v1
+llmrelay config set upstream.api_key
+llmrelay test upstream
 ```
 
 使用环境变量时，确保后台服务启动环境也能读取该变量。
