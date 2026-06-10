@@ -2,31 +2,31 @@
 
 `llm-relay` is a Go CLI for running a local LLM API relay. Its command-line binary is `llmrelay`.
 
-The current repository contains user-level self-installation, local configuration, relay token management, single-upstream configuration, HTTP request forwarding, optional SSH reverse tunnel support with reconnects, background process commands, diagnostic commands, and local install support. It does not yet implement usage tracking, quotas, or rate limits.
+The current repository contains user-level self-installation, local configuration, relay token management, single-upstream configuration, HTTP request forwarding, optional SSH reverse tunnel support with reconnects, background process commands, and diagnostic commands. It does not yet implement usage tracking, quotas, or rate limits.
 
 ## Current Commands
 
 ```sh
-go run ./cmd/llmrelay install
-go run ./cmd/llmrelay setup
-go run ./cmd/llmrelay version
-go run ./cmd/llmrelay config show
-go run ./cmd/llmrelay config validate
-go run ./cmd/llmrelay config set-url https://api.example.test/v1
-go run ./cmd/llmrelay config set-key --stdin
-go run ./cmd/llmrelay config test --path /v1/models
-go run ./cmd/llmrelay token create local
-go run ./cmd/llmrelay token list
-go run ./cmd/llmrelay token inspect local
-go run ./cmd/llmrelay token verify local --stdin
-go run ./cmd/llmrelay doctor
-go run ./cmd/llmrelay serve
-go run ./cmd/llmrelay start
-go run ./cmd/llmrelay stop
-go run ./cmd/llmrelay restart
-go run ./cmd/llmrelay status
-go run ./cmd/llmrelay logs
-go run ./cmd/llmrelay completion bash
+llmrelay install
+llmrelay setup
+llmrelay version
+llmrelay config show
+llmrelay config validate
+llmrelay config set-url https://api.example.test/v1
+llmrelay config set-key --stdin
+llmrelay config test --path /v1/models
+llmrelay token create local
+llmrelay token list
+llmrelay token inspect local
+llmrelay token verify local --stdin
+llmrelay doctor
+llmrelay serve
+llmrelay start
+llmrelay stop
+llmrelay restart
+llmrelay status
+llmrelay logs
+llmrelay completion bash
 ```
 
 ## Minimal Flow
@@ -40,7 +40,7 @@ chmod +x ./llmrelay-darwin-arm64
 
 The installer copies the binary to `~/Library/Application Support/llmrelay/bin/llmrelay`, creates a `~/.local/bin/llmrelay` command link, initializes `~/.llmrelay/config.toml` and `~/.llmrelay/tokens.json` if missing, updates `~/.zshrc` for PATH and zsh completion, and preserves existing config and token files.
 
-Configure one upstream:
+Run the first-time setup wizard to configure one upstream and create a relay token:
 
 ```sh
 llmrelay setup
@@ -54,7 +54,7 @@ printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay config set-key --stdin
 llmrelay config test --path /v1/models
 ```
 
-Create additional relay tokens as needed:
+Create additional relay tokens as needed. `tokens.json` stores relay tokens in plaintext, so keep that file private:
 
 ```sh
 llmrelay token create local --name "Local client"
@@ -108,7 +108,7 @@ Example token store:
     "key_id": "local",
     "name": "Local client",
     "note": "",
-    "token": "llmr_example",
+    "token": "llmr_xxx",
     "token_hash": "sha256:<hex>",
     "created_at": "2026-06-10T00:00:00Z",
     "rotated_at": "",
@@ -175,6 +175,12 @@ api_key = llmr_xxx
 When the tunnel exits unexpectedly, `llmrelay serve` retries it with backoff and writes tunnel state changes to the process log.
 
 ## Development
+
+Run the CLI from source:
+
+```sh
+go run ./cmd/llmrelay version
+```
 
 Run the local checks:
 
