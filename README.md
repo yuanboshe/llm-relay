@@ -23,7 +23,6 @@ llmrelay config set upstream.api_key
 llmrelay config set upstream.api_key -
 llmrelay config set upstream.api_key_env OPENAI_API_KEY
 llmrelay config set listen_addr 127.0.0.1:18080
-llmrelay config set public_url https://llm.example.test
 llmrelay token create local
 llmrelay token list
 llmrelay token show local
@@ -32,8 +31,7 @@ llmrelay serve
 llmrelay test
 llmrelay test upstream
 llmrelay test local
-llmrelay test public
-llmrelay test public https://llm.example.test
+llmrelay test remote-client https://llm.example.test
 llmrelay start
 llmrelay stop
 llmrelay restart
@@ -73,6 +71,8 @@ printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay config set upstream.api_key -
 llmrelay test upstream
 ```
 
+When the upstream models endpoint returns model IDs, `llmrelay test upstream` prints a short sample list so a successful test is easy to recognize.
+
 Create additional relay tokens as needed. `tokens.json` stores relay tokens in plaintext, so keep that file private:
 
 ```sh
@@ -92,8 +92,10 @@ Run the relay in the background and test it without writing curl commands by han
 llmrelay start
 llmrelay status
 llmrelay logs --tail 50
-llmrelay test
+llmrelay test local
 ```
+
+`llmrelay test <key-id>` tests the local relay with the named relay token. Add a URL to test a remote relay endpoint with the same token.
 
 On macOS, `llmrelay start` uses a user LaunchAgent so the relay starts again when you log in. `llmrelay stop` unloads that LaunchAgent.
 If `llmrelay start` is run while the service is already running, it reports `already running` and does not restart the process. Use `llmrelay restart` when you explicitly want to stop and start the service.
@@ -104,7 +106,6 @@ The default configuration file is `~/.llmrelay/config.toml`. It uses TOML syntax
 
 ```toml
 listen_addr = "0.0.0.0:18080"
-public_url = "https://llm.example.test"
 
 [upstream]
 base_url = "https://api.example.test/v1"
@@ -187,11 +188,10 @@ enabled = false
 
 If `cloudflared` is already installed and loaded, `setup` skips reinstalling it by default. Choose update only when you want to replace the connector token.
 
-Save the public URL and test the public entry from the relay host:
+Test the public entry from the relay host by passing the relay token key ID and public URL:
 
 ```sh
-llmrelay config set public_url https://llm.example.test
-llmrelay test public
+llmrelay test remote-client https://llm.example.test
 ```
 
 OpenAI-compatible clients usually use:

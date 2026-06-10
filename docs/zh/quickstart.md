@@ -41,6 +41,8 @@ llmrelay config set upstream.api_key
 llmrelay test upstream
 ```
 
+如果 upstream 的 models 接口返回模型 ID，`llmrelay test upstream` 会展示前几项模型名称，便于确认测试确实连到了可用上游。
+
 ## 3. 创建额外 token
 
 按客户端或使用场景创建 relay token。
@@ -88,4 +90,10 @@ api_key = llmr_xxx
 
 ```sh
 llmrelay test local
+```
+
+其中 `local` 是 relay token 的 `key-id`。测试远程入口时在后面追加 URL：
+
+```sh
+llmrelay test remote-client https://relay.example.test
 ```

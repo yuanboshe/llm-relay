@@ -93,6 +93,9 @@ func TestInitCreatesConfigAndTokenFiles(t *testing.T) {
 	if !strings.Contains(configText, `listen_addr = "127.0.0.1:18080"`) {
 		t.Fatalf("config = %q, want default listen addr", configText)
 	}
+	if strings.Contains(configText, "public_url") {
+		t.Fatalf("config = %q, want no public_url", configText)
+	}
 	if !strings.Contains(configText, "[upstream]") {
 		t.Fatalf("config = %q, want upstream section", configText)
 	}
@@ -109,6 +112,37 @@ func TestInitCreatesConfigAndTokenFiles(t *testing.T) {
 	}
 	if strings.TrimSpace(string(tokenData)) != "[]" {
 		t.Fatalf("tokens = %q, want empty json array", string(tokenData))
+	}
+}
+
+func TestPublicURLIsNotKnownConfigKey(t *testing.T) {
+	if IsKnownKey("public_url") {
+		t.Fatal("public_url is known, want unsupported config key")
+	}
+}
+
+func TestLoadIgnoresLegacyPublicURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), DefaultConfigName)
+	text := `listen_addr = "127.0.0.1:18080"
+public_url = "https://relay.example.test"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+`
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if _, ok := cfg.Extra["public_url"]; ok {
+		t.Fatalf("Extra contains legacy public_url: %#v", cfg.Extra)
+	}
+	formatted := Format(cfg)
+	if strings.Contains(formatted, "public_url") {
+		t.Fatalf("Format = %q, want no public_url", formatted)
 	}
 }
 

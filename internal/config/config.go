@@ -49,7 +49,6 @@ type Tunnel struct {
 // Config contains relay runtime settings.
 type Config struct {
 	ListenAddr string
-	PublicURL  string
 	Upstream   Upstream
 	Tunnel     Tunnel
 	Extra      map[string]any
@@ -86,7 +85,6 @@ func DefaultPaths() (Paths, error) {
 func DefaultConfig() Config {
 	return Config{
 		ListenAddr: "127.0.0.1:18080",
-		PublicURL:  "",
 		Upstream:   Upstream{},
 		Tunnel: Tunnel{
 			Enabled:    false,
@@ -172,7 +170,6 @@ func Load(path string) (Config, error) {
 	cfg := DefaultConfig()
 	cfg.Extra = map[string]any{}
 	cfg.ListenAddr = getString(doc, "listen_addr", cfg.ListenAddr)
-	cfg.PublicURL = getString(doc, "public_url", cfg.PublicURL)
 	if upstream, ok := doc["upstream"].(map[string]any); ok {
 		cfg.Upstream.BaseURL = getString(upstream, "base_url", cfg.Upstream.BaseURL)
 		cfg.Upstream.APIKeySource = getString(upstream, "api_key_source", cfg.Upstream.APIKeySource)
@@ -188,11 +185,18 @@ func Load(path string) (Config, error) {
 		cfg.Tunnel.RemotePort = getString(tunnel, "remote_port", cfg.Tunnel.RemotePort)
 	}
 	for key, value := range flattenMap("", doc) {
+		if isIgnoredLegacyKey(key) {
+			continue
+		}
 		if !IsKnownKey(key) {
 			cfg.Extra[key] = value
 		}
 	}
 	return cfg, nil
+}
+
+func isIgnoredLegacyKey(key string) bool {
+	return key == "public_url"
 }
 
 // Save writes a config.toml file.
@@ -205,7 +209,7 @@ func Save(path string, cfg Config) error {
 func Format(cfg Config) string {
 	var b strings.Builder
 	_, _ = fmt.Fprintf(&b, "listen_addr = \"%s\"\n", escape(cfg.ListenAddr))
-	_, _ = fmt.Fprintf(&b, "public_url = \"%s\"\n\n", escape(cfg.PublicURL))
+	_, _ = fmt.Fprintln(&b)
 	_, _ = fmt.Fprintf(&b, "[upstream]\n")
 	_, _ = fmt.Fprintf(&b, "base_url = \"%s\"\n", escape(cfg.Upstream.BaseURL))
 	_, _ = fmt.Fprintf(&b, "api_key_source = \"%s\"\n", escape(cfg.Upstream.APIKeySource))
@@ -259,7 +263,6 @@ func FormatRedacted(cfg Config) string {
 func IsKnownKey(key string) bool {
 	switch key {
 	case "listen_addr",
-		"public_url",
 		"upstream.base_url",
 		"upstream.api_key_source",
 		"upstream.api_key_env",

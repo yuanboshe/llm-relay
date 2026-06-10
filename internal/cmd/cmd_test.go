@@ -514,7 +514,6 @@ func TestRunSetupKeepsExistingConfigAndSkipsInstalledCloudflaredByDefault(t *tes
 	}
 	keyValue := strings.Join([]string{"existing", "key"}, "-")
 	configText := `listen_addr = "127.0.0.1:18080"
-public_url = "https://llm.example.test"
 
 [upstream]
 base_url = "https://api.example.test/v1"
@@ -558,11 +557,13 @@ remote_port = "18080"
 	for _, want := range []string{
 		`base_url = "https://api.example.test/v1"`,
 		`api_key = "` + keyValue + `"`,
-		`public_url = "https://llm.example.test"`,
 	} {
 		if !strings.Contains(updated, want) {
 			t.Fatalf("config = %q, want %q", updated, want)
 		}
+	}
+	if strings.Contains(updated, "public_url") {
+		t.Fatalf("config = %q, want no public_url", updated)
 	}
 	for _, call := range runner.calls {
 		if strings.Contains(call, "service install") || strings.Contains(call, "brew install") {
@@ -614,6 +615,7 @@ func TestRunRemovedCommandsAreUnavailable(t *testing.T) {
 		{"config", "set-url", "https://api.example.test/v1"},
 		{"config", "set-key", "--stdin"},
 		{"config", "test"},
+		{"config", "set", "public_url", "https://llm.example.test"},
 		{"token", "inspect", "local"},
 		{"token", "verify", "local", "--stdin"},
 	}
@@ -626,8 +628,10 @@ func TestRunRemovedCommandsAreUnavailable(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Run(%v) returned nil error, want removed command error", args)
 			}
-			if !strings.Contains(err.Error(), "unknown command") && !strings.Contains(err.Error(), "unknown flag") {
-				t.Fatalf("error = %q, want unknown command or flag", err.Error())
+			if !strings.Contains(err.Error(), "unknown command") &&
+				!strings.Contains(err.Error(), "unknown flag") &&
+				!strings.Contains(err.Error(), "no longer configured") {
+				t.Fatalf("error = %q, want removed command or config error", err.Error())
 			}
 		})
 	}
@@ -649,7 +653,6 @@ func TestRunConfigSetUpdatesKnownValuesAndRedactsShow(t *testing.T) {
 		{args: []string{"config", "set", "upstream.base_url", "https://api.example.test/v1/"}},
 		{args: []string{"config", "set", "upstream.api_key", "-"}, stdin: keyValue + "\n"},
 		{args: []string{"config", "set", "listen_addr", "0.0.0.0:18080"}},
-		{args: []string{"config", "set", "public_url", "https://llm.example.test"}},
 		{args: []string{"config", "set", "tunnel.enabled", "true"}},
 	}
 	for _, command := range commands {
@@ -674,7 +677,6 @@ func TestRunConfigSetUpdatesKnownValuesAndRedactsShow(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		`listen_addr = "0.0.0.0:18080"`,
-		`public_url = "https://llm.example.test"`,
 		`base_url = "https://api.example.test/v1"`,
 		`api_key_source = "inline"`,
 		`api_key = "<redacted>"`,
@@ -683,6 +685,9 @@ func TestRunConfigSetUpdatesKnownValuesAndRedactsShow(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("config show = %q, want %q", out, want)
 		}
+	}
+	if strings.Contains(out, "public_url") {
+		t.Fatalf("config show = %q, want no public_url", out)
 	}
 	if strings.Contains(out, keyValue) {
 		t.Fatalf("config show leaked key: %q", out)
@@ -1033,8 +1038,52 @@ func TestRunTestUpstreamUsesKeyWithoutPrintingIt(t *testing.T) {
 	if strings.Contains(out, keyValue) {
 		t.Fatalf("test upstream leaked key: %q", out)
 	}
-	if !strings.Contains(out, "status: 200") {
-		t.Fatalf("test upstream output = %q, want status", out)
+	if !strings.Contains(out, "upstream ok") {
+		t.Fatalf("test upstream output = %q, want upstream ok", out)
+	}
+	if strings.Contains(out, "status:") {
+		t.Fatalf("test upstream output = %q, want no success status", out)
+	}
+}
+
+func TestRunTestUpstreamPrintsModelSamples(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"object":"list","data":[{"id":"model-alpha"},{"id":"model-beta"},{"id":"model-gamma"},{"id":"model-delta"}]}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	for _, args := range [][]string{
+		{"install"},
+		{"config", "set", "upstream.base_url", server.URL},
+		{"config", "set", "upstream.api_key", "redacted"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"test", "upstream"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(test upstream) returned error: %v", err)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{"models: model-alpha, model-beta, model-gamma"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("test upstream output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "model-delta") {
+		t.Fatalf("test upstream output = %q, want only a sample of models", out)
 	}
 }
 
@@ -1076,12 +1125,15 @@ func TestRunTestUpstreamTriesModelsPathWhenBaseURLIncludesV1(t *testing.T) {
 	if seenPath != "/v1/models" {
 		t.Fatalf("seenPath = %q, want /v1/models", seenPath)
 	}
-	if !strings.Contains(out, "status: 200") {
-		t.Fatalf("test upstream output = %q, want 200 status", out)
+	if !strings.Contains(out, "upstream ok") {
+		t.Fatalf("test upstream output = %q, want upstream ok", out)
+	}
+	if strings.Contains(out, "status:") {
+		t.Fatalf("test upstream output = %q, want no success status", out)
 	}
 }
 
-func TestRunRelayTestUsesLocalConfigAndToken(t *testing.T) {
+func TestRunRelayTestUsesNamedTokenAgainstLocalRelay(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
 	if err := os.MkdirAll(home, 0o700); err != nil {
@@ -1098,7 +1150,8 @@ func TestRunRelayTestUsesLocalConfigAndToken(t *testing.T) {
 		if r.URL.Path != "/v1/models" {
 			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"local-alpha"},{"id":"local-beta"},{"id":"local-gamma"},{"id":"local-delta"}]}`)
 	}))
 	server.Listener = listener
 	server.Start()
@@ -1130,7 +1183,7 @@ remote_port = "18080"
 	var stderr bytes.Buffer
 
 	if err := Run([]string{"test", "local"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(test local) returned error: %v", err)
+		t.Fatalf("Run(test <key-id>) returned error: %v", err)
 	}
 
 	if seenAuth != "Bearer "+tokenValue {
@@ -1138,14 +1191,17 @@ remote_port = "18080"
 	}
 	out := stdout.String()
 	for _, want := range []string{
-		"relay: ok",
-		"status: 200",
+		"relay ok",
 		"key-id: local",
-		"OpenAI-compatible base_url:",
-		"Anthropic-compatible base_url:",
+		"models: local-alpha, local-beta, local-gamma",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("test output = %q, want %q", out, want)
+		}
+	}
+	for _, unwanted := range []string{"status:", "OpenAI-compatible base_url:", "Anthropic-compatible base_url:", "local-delta"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("test output = %q, want no %q", out, unwanted)
 		}
 	}
 	if strings.Contains(out, tokenValue) {
@@ -1153,7 +1209,7 @@ remote_port = "18080"
 	}
 }
 
-func TestRunRelayTestURLOverridePrintsClientBaseURLs(t *testing.T) {
+func TestRunRelayTestUsesNamedTokenAgainstExplicitURL(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
 	if err := os.MkdirAll(home, 0o700); err != nil {
@@ -1167,7 +1223,8 @@ func TestRunRelayTestURLOverridePrintsClientBaseURLs(t *testing.T) {
 		if r.URL.Path != "/v1/models" {
 			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"remote-alpha"},{"id":"remote-beta"}]}`)
 	}))
 	defer server.Close()
 	configText := `listen_addr = "0.0.0.0:18080"
@@ -1189,15 +1246,17 @@ api_key = "redacted"
 	var stderr bytes.Buffer
 
 	if err := Run([]string{"test", "public", server.URL}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(test public <url>) returned error: %v", err)
+		t.Fatalf("Run(test <key-id> <url>) returned error: %v", err)
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, server.URL+"/v1/models") {
-		t.Fatalf("test output = %q, want tested URL", out)
+	for _, want := range []string{"relay ok", "key-id: public", server.URL + "/v1/models", "models: remote-alpha, remote-beta"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("test output = %q, want %q", out, want)
+		}
 	}
-	if !strings.Contains(out, server.URL+"/v1") {
-		t.Fatalf("test output = %q, want OpenAI base URL", out)
+	if strings.Contains(out, "status:") {
+		t.Fatalf("test output = %q, want no success status", out)
 	}
 	if strings.Contains(out, tokenValue) {
 		t.Fatalf("test output leaked relay token: %q", out)
@@ -1231,40 +1290,32 @@ api_key = "redacted"
 	if err == nil {
 		t.Fatal("Run(test) returned nil error, want missing token error")
 	}
-	if !strings.Contains(err.Error(), "no enabled relay token found") {
+	if !strings.Contains(err.Error(), "relay token local not found") {
 		t.Fatalf("error = %q, want missing token", err.Error())
 	}
 }
 
-func TestRunRelayTestSubcommandsUseExplicitTargets(t *testing.T) {
+func TestRunRelayTestDoesNotSupportLocalOrPublicSubcommands(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LLMRELAY_HOME", home)
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("mkdir home: %v", err)
 	}
 	tokenValue := "llmr_test_subcommand_token"
-	upstreamKey := strings.Join([]string{"upstream", "redacted"}, "-")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if auth != "Bearer "+tokenValue && auth != "Bearer "+upstreamKey {
-			t.Fatalf("Authorization = %q, want relay token or upstream key", auth)
-		}
-		switch r.URL.Path {
-		case "/v1/models", "/models":
-			w.WriteHeader(http.StatusOK)
-		default:
+		if r.URL.Path != "/v1/models" {
 			t.Fatalf("unexpected path: %q", r.URL.Path)
 		}
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 	configText := `listen_addr = "` + strings.TrimPrefix(server.URL, "http://") + `"
-public_url = "` + server.URL + `"
 
 [upstream]
-base_url = "` + server.URL + `/v1"
+base_url = "https://api.example.test/v1"
 api_key_source = "inline"
 api_key_env = ""
-api_key = "` + upstreamKey + `"
+api_key = "redacted"
 `
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -1275,29 +1326,22 @@ api_key = "` + upstreamKey + `"
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if err := Run([]string{"test", "local"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(test local) returned error: %v", err)
+	err := Run([]string{"test", "local"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run(test local key-id form) returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "relay: ok") {
+	if !strings.Contains(stdout.String(), "relay ok") {
 		t.Fatalf("local test output = %q, want relay ok", stdout.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Run([]string{"test", "public"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(test public) returned error: %v", err)
+	err = Run([]string{"test", "public"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(test public) returned nil error, want missing key-id error")
 	}
-	if !strings.Contains(stdout.String(), "relay: ok") {
-		t.Fatalf("public test output = %q, want relay ok", stdout.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if err := Run([]string{"test", "upstream"}, &stdout, &stderr); err != nil {
-		t.Fatalf("Run(test upstream) returned error: %v", err)
-	}
-	if !strings.Contains(stdout.String(), "upstream: ok") {
-		t.Fatalf("upstream test output = %q, want upstream ok", stdout.String())
+	if !strings.Contains(err.Error(), "relay token public not found") {
+		t.Fatalf("error = %q, want public treated as key-id", err.Error())
 	}
 }
 

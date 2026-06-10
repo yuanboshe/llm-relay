@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -589,9 +590,6 @@ func printSetupSummary(out io.Writer, cfg config.Config) error {
 	if _, err := fmt.Fprintf(out, "  listen_addr: %s\n", emptyDisplay(cfg.ListenAddr)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(out, "  public_url: %s\n", emptyDisplay(cfg.PublicURL)); err != nil {
-		return err
-	}
 	if _, err := fmt.Fprintf(out, "  upstream base_url: %s\n", emptyDisplay(cfg.Upstream.BaseURL)); err != nil {
 		return err
 	}
@@ -931,11 +929,7 @@ func setConfigValue(cfg *config.Config, key string, rawValue string) error {
 	case "listen_addr":
 		cfg.ListenAddr = rawValue
 	case "public_url":
-		value, err := normalizeBaseURL(rawValue)
-		if err != nil {
-			return err
-		}
-		cfg.PublicURL = value
+		return fmt.Errorf("public_url is no longer configured; pass the URL to llmrelay test <key-id> <url>")
 	case "upstream.base_url":
 		value, err := normalizeBaseURL(rawValue)
 		if err != nil {
@@ -1109,24 +1103,22 @@ func newServeCommand() *cobra.Command {
 
 func newRelayTestCommand() *cobra.Command {
 	testCmd := &cobra.Command{
-		Use:   "test",
-		Short: "Test upstream, local relay, and public relay endpoints",
-		Args:  cobra.NoArgs,
+		Use:   "test [key-id] [url]",
+		Short: "Test upstream connectivity or a relay token",
+		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, paths, err := loadConfig()
 			if err != nil {
 				return err
 			}
-			if err := runUpstreamTest(cmd.OutOrStdout(), cfg); err != nil {
-				return err
+			if len(args) == 0 {
+				return runUpstreamTest(cmd.OutOrStdout(), cfg)
 			}
-			if err := runRelayTest(cmd.OutOrStdout(), cfg, paths, "local", ""); err != nil {
-				return err
+			baseURL := ""
+			if len(args) == 2 {
+				baseURL = args[1]
 			}
-			if strings.TrimSpace(cfg.PublicURL) != "" {
-				return runRelayTest(cmd.OutOrStdout(), cfg, paths, "public", cfg.PublicURL)
-			}
-			return nil
+			return runRelayTest(cmd.OutOrStdout(), cfg, paths, args[0], baseURL)
 		},
 	}
 	testCmd.AddCommand(&cobra.Command{
@@ -1139,37 +1131,6 @@ func newRelayTestCommand() *cobra.Command {
 				return err
 			}
 			return runUpstreamTest(cmd.OutOrStdout(), cfg)
-		},
-	})
-	testCmd.AddCommand(&cobra.Command{
-		Use:   "local",
-		Short: "Test the local relay endpoint",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, paths, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			return runRelayTest(cmd.OutOrStdout(), cfg, paths, "local", "")
-		},
-	})
-	testCmd.AddCommand(&cobra.Command{
-		Use:   "public [url]",
-		Short: "Test the public relay endpoint",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, paths, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			baseURL := cfg.PublicURL
-			if len(args) == 1 {
-				baseURL = args[0]
-			}
-			if strings.TrimSpace(baseURL) == "" {
-				return fmt.Errorf("public_url is not configured; run llmrelay config set public_url <url>")
-			}
-			return runRelayTest(cmd.OutOrStdout(), cfg, paths, "public", baseURL)
 		},
 	})
 	return testCmd
@@ -1197,7 +1158,13 @@ func runUpstreamTest(out io.Writer, cfg config.Config) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
 	}
-	_, err = fmt.Fprintf(out, "upstream: ok\nurl: %s\nstatus: %d\n\n", targetURL, resp.StatusCode)
+	if _, err := fmt.Fprintf(out, "upstream ok\nurl: %s\n", targetURL); err != nil {
+		return err
+	}
+	if err := printModelSamples(out, resp.Body); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out)
 	return err
 }
 
@@ -1241,16 +1208,58 @@ func upstreamCandidatePaths(baseURL string) []string {
 	return []string{"/v1/models", "/models"}
 }
 
-func runRelayTest(out io.Writer, cfg config.Config, paths config.Paths, label string, baseURL string) error {
+func modelSamples(body io.Reader, limit int) ([]string, int) {
+	if body == nil || limit <= 0 {
+		return nil, 0
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, 1<<20)).Decode(&payload); err != nil {
+		return nil, 0
+	}
+	samples := make([]string, 0, limit)
+	total := 0
+	for _, model := range payload.Data {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			continue
+		}
+		total++
+		if len(samples) < limit {
+			samples = append(samples, id)
+		}
+	}
+	return samples, total
+}
+
+func printModelSamples(out io.Writer, body io.Reader) error {
+	samples, total := modelSamples(body, 3)
+	if len(samples) == 0 {
+		_, err := fmt.Fprintln(out, "models: unavailable")
+		return err
+	}
+	line := strings.Join(samples, ", ")
+	if total > len(samples) {
+		line += fmt.Sprintf(" (+%d more)", total-len(samples))
+	}
+	_, err := fmt.Fprintf(out, "models: %s\n", line)
+	return err
+}
+
+func runRelayTest(out io.Writer, cfg config.Config, paths config.Paths, keyID string, baseURL string) error {
 	store := tokenstore.New(paths.TokenFile)
 	records, err := store.Load()
 	if err != nil {
 		return err
 	}
-	selected, err := selectRelayTestToken(records, "")
+	selected, err := selectRelayTestToken(records, keyID)
 	if err != nil {
 		return err
 	}
+	localTest := strings.TrimSpace(baseURL) == ""
 	if baseURL == "" {
 		baseURL, err = relayLocalBaseURL(cfg.ListenAddr)
 		if err != nil {
@@ -1259,32 +1268,31 @@ func runRelayTest(out io.Writer, cfg config.Config, paths config.Paths, label st
 	}
 	resp, targetURL, err := requestRelay(baseURL, selected.Token)
 	if err != nil {
-		return fmt.Errorf("%s relay request failed; run llmrelay start and retry: %w", label, err)
+		if localTest {
+			return fmt.Errorf("relay request failed; run llmrelay start and retry: %w", err)
+		}
+		return fmt.Errorf("relay request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("%s relay returned HTTP 401; selected relay token was rejected", label)
+		return fmt.Errorf("relay returned HTTP 401; token %s was rejected", selected.KeyID)
 	}
 	if resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("%s relay returned HTTP 403; selected relay token is disabled", label)
+		return fmt.Errorf("relay returned HTTP 403; token %s is disabled", selected.KeyID)
 	}
 	if resp.StatusCode == http.StatusBadGateway {
-		return fmt.Errorf("%s relay returned HTTP 502; run llmrelay test upstream to check upstream", label)
+		return fmt.Errorf("relay returned HTTP 502; run llmrelay test upstream to check upstream")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s relay returned HTTP %d", label, resp.StatusCode)
+		return fmt.Errorf("relay returned HTTP %d", resp.StatusCode)
 	}
-	openAIBase, anthropicBase, err := relayClientBaseURLs(baseURL)
-	if err != nil {
+	if _, err := fmt.Fprintf(out, "relay ok\nkey-id: %s\nurl: %s\n", selected.KeyID, targetURL); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(out, "relay: ok\nscope: %s\nurl: %s\nstatus: %d\nkey-id: %s\n\n", label, targetURL, resp.StatusCode, selected.KeyID); err != nil {
+	if err := printModelSamples(out, resp.Body); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(out, "OpenAI-compatible base_url:\n  %s\n\n", openAIBase); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(out, "Anthropic-compatible base_url:\n  %s\n", anthropicBase)
+	_, err = fmt.Fprintln(out)
 	return err
 }
 
@@ -1310,7 +1318,7 @@ func selectRelayTestToken(records []tokenstore.Record, keyID string) (tokenstore
 	if keyID != "" {
 		_, record, err := tokenstore.Find(records, keyID)
 		if err != nil {
-			return tokenstore.Record{}, err
+			return tokenstore.Record{}, fmt.Errorf("relay token %s not found", keyID)
 		}
 		if !record.Enabled {
 			return tokenstore.Record{}, fmt.Errorf("relay token %s is disabled", keyID)
@@ -1365,27 +1373,6 @@ func joinRelayBaseURLPath(baseURL string, path string) (string, error) {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String(), nil
-}
-
-func relayClientBaseURLs(baseURL string) (string, string, error) {
-	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
-	if err != nil {
-		return "", "", err
-	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return "", "", fmt.Errorf("relay URL must use http or https and include host")
-	}
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	basePath := strings.TrimRight(parsed.Path, "/")
-	if basePath == "/v1" {
-		openAI := parsed.String()
-		parsed.Path = ""
-		return openAI, parsed.String(), nil
-	}
-	anthropic := parsed.String()
-	parsed.Path = basePath + "/v1"
-	return parsed.String(), anthropic, nil
 }
 
 func newStartCommand() *cobra.Command {

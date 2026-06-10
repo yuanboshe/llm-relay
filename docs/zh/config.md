@@ -19,7 +19,6 @@ macOS 用户级安装还会使用：
 
 ```toml
 listen_addr = "127.0.0.1:18080"
-public_url = "https://llm.example.test"
 
 [upstream]
 base_url = "https://api.example.test/v1"
