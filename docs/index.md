@@ -1,8 +1,6 @@
 <script setup>
 import { onMounted } from "vue";
-import { useRouter } from "vitepress";
-
-const router = useRouter();
+import { withBase } from "vitepress";
 
 onMounted(() => {
   const languages = Array.isArray(navigator.languages) && navigator.languages.length > 0
@@ -12,7 +10,7 @@ onMounted(() => {
     language.toLowerCase().startsWith("zh"),
   );
 
-  router.go(prefersChinese ? "/zh/" : "/en/");
+  window.location.replace(withBase(prefersChinese ? "/zh/" : "/en/"));
 });
 </script>
 
