@@ -1,18 +1,9 @@
-.PHONY: test build vet clean
+.PHONY: test vet build build-local build-linux-amd64 build-linux-arm64 build-windows-amd64 build-darwin-amd64 build-darwin-arm64 clean
 
-GO_BUILD_FLAGS := -trimpath -buildvcs=false
-VERSION ?= v0.1.0
+VERSION ?= v0.0.0
 COMMIT ?= $(shell git rev-parse --short HEAD)
 BUILD_DATE ?= unknown
-LDFLAGS := -X github.com/yuanboshe/llm-relay/internal/cmd.Version=$(VERSION) -X github.com/yuanboshe/llm-relay/internal/cmd.Commit=$(COMMIT) -X github.com/yuanboshe/llm-relay/internal/cmd.BuildDate=$(BUILD_DATE)
-HOST_GOOS := $(shell go env GOOS)
-ifeq ($(HOST_GOOS),windows)
-BINARY := llmrelay.exe
-MKDIR_DIST := if not exist dist mkdir dist
-else
-BINARY := llmrelay
-MKDIR_DIST := mkdir -p dist
-endif
+BUILD := go run ./scripts/build-release.go -version $(VERSION) -commit $(COMMIT) -date $(BUILD_DATE)
 
 test:
 	go test ./...
@@ -21,8 +12,25 @@ vet:
 	go vet ./...
 
 build:
-	$(MKDIR_DIST)
-	go build $(GO_BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o ./dist/$(BINARY) ./cmd/llmrelay
+	$(BUILD)
+
+build-local:
+	$(BUILD) -local
+
+build-linux-amd64:
+	$(BUILD) -target linux/amd64
+
+build-linux-arm64:
+	$(BUILD) -target linux/arm64
+
+build-windows-amd64:
+	$(BUILD) -target windows/amd64
+
+build-darwin-amd64:
+	$(BUILD) -target darwin/amd64
+
+build-darwin-arm64:
+	$(BUILD) -target darwin/arm64
 
 clean:
-	rm -rf ./dist coverage.out
+	go run ./scripts/build-release.go -clean

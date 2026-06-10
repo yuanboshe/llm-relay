@@ -50,8 +50,8 @@ func TestRunVersion(t *testing.T) {
 		t.Fatalf("Run(version) returned error: %v", err)
 	}
 
-	if got := strings.TrimSpace(stdout.String()); got != "v0.1.0" {
-		t.Fatalf("version output = %q, want v0.1.0", got)
+	if got := strings.TrimSpace(stdout.String()); got != "v0.0.0" {
+		t.Fatalf("version output = %q, want v0.0.0", got)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())

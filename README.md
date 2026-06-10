@@ -2,7 +2,7 @@
 
 `llm-relay` is a Go CLI for running a local LLM API relay. Its command-line binary is `llmrelay`.
 
-Current version: `v0.1.0`.
+Current release line: `v0.1.x`. Source builds default to `v0.0.0`; if a binary reports `v0.0.0`, it was built without an explicit release version.
 
 The current repository contains user-level self-installation, local configuration, relay token management, single-upstream configuration, HTTP request forwarding, optional SSH reverse tunnel support with reconnects, background process commands, and diagnostic commands. It does not yet implement usage tracking, quotas, or rate limits.
 
@@ -259,16 +259,38 @@ Run the CLI from source:
 go run ./cmd/llmrelay version
 ```
 
-Build the release binary. The default version is `v0.1.0`; `make build` embeds version, commit, and build date:
+Build cross-platform single-file binaries. The default source-build version is `v0.0.0`; pass `VERSION=...` for release builds. The build strips Go symbols with linker flags and does not use UPX:
 
 ```sh
 make build
 ```
 
-Override the version when needed:
+Build a versioned release:
 
 ```sh
 make build VERSION=v0.1.0
+```
+
+Release outputs:
+
+```text
+dist/llmrelay-linux-amd64
+dist/llmrelay-linux-amd64
+dist/llmrelay-linux-arm64
+dist/llmrelay-windows-amd64.exe
+dist/llmrelay-darwin-amd64
+dist/llmrelay-darwin-arm64
+dist/SHA256SUMS
+```
+
+Each file is directly executable after permissions are set. For example, download `llmrelay-darwin-arm64`, run `chmod +x ./llmrelay-darwin-arm64`, then `./llmrelay-darwin-arm64 install`; install copies it to the final `llmrelay` command. Build assets are written to `dist/`, the repository's existing ignored distribution-output directory.
+
+Build a single target when needed:
+
+```sh
+make build-darwin-arm64
+make build-windows-amd64
+make build-local
 ```
 
 Run the local checks:
