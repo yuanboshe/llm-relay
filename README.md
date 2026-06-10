@@ -6,6 +6,16 @@ Current release line: `v0.1.x`. Source builds default to `v0.0.0`; if a binary r
 
 The repository provides user-level installation and uninstallation, local configuration, relay token management, HTTP request forwarding, optional SSH reverse tunnel support with reconnects, background process commands, and diagnostics. It does not yet implement usage tracking, quotas, or rate limits.
 
+## Build from Source
+
+To build release binaries from source, run `make build` from the repository root:
+
+```sh
+make build
+```
+
+This builds the default release targets and writes them to `dist/` with matching `SHA256SUMS` checksums. Source builds default to version `v0.0.0`; set `VERSION=v0.1.0` (or another release tag) if you want the binary to report an explicit release version.
+
 ## Documentation
 
 User documentation is available at <https://yuanboshe.github.io/llm-relay/>.
