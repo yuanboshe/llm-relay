@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,28 @@ func setInstallTestHome(t *testing.T) string {
 	return installHome
 }
 
+type fakeExternalRunner struct {
+	calls []string
+	err   error
+}
+
+func (r *fakeExternalRunner) Run(name string, args ...string) (string, error) {
+	r.calls = append(r.calls, strings.Join(append([]string{name}, args...), " "))
+	return "", r.err
+}
+
+func setSetupExternalTestRunner(t *testing.T, runner *fakeExternalRunner, goos string) {
+	t.Helper()
+	oldRunner := setupExternalRunner
+	oldGOOS := setupGOOS
+	setupExternalRunner = runner
+	setupGOOS = func() string { return goos }
+	t.Cleanup(func() {
+		setupExternalRunner = oldRunner
+		setupGOOS = oldGOOS
+	})
+}
+
 func TestRunVersion(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -27,11 +50,17 @@ func TestRunVersion(t *testing.T) {
 		t.Fatalf("Run(version) returned error: %v", err)
 	}
 
-	if got := strings.TrimSpace(stdout.String()); got != "dev" {
-		t.Fatalf("version output = %q, want dev", got)
+	if got := strings.TrimSpace(stdout.String()); got != "v0.1.0" {
+		t.Fatalf("version output = %q, want v0.1.0", got)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestVersionStringIncludesBuildMetadata(t *testing.T) {
+	if got := versionString("v0.1.0", "abc123", "2026-06-10T00:00:00Z"); got != "v0.1.0\ncommit: abc123\ndate: 2026-06-10T00:00:00Z" {
+		t.Fatalf("versionString = %q, want metadata", got)
 	}
 }
 
@@ -149,11 +178,11 @@ remote_port = "28080"
 		t.Fatalf("Run(status) returned error: %v", err)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "tunnel: enabled") {
-		t.Fatalf("status output = %q, want tunnel enabled", out)
+	if !strings.Contains(out, "ssh-tunnel: enabled") {
+		t.Fatalf("status output = %q, want ssh tunnel enabled", out)
 	}
-	if !strings.Contains(out, "tunnel-remote: 127.0.0.1:28080") {
-		t.Fatalf("status output = %q, want tunnel remote", out)
+	if !strings.Contains(out, "ssh-tunnel-remote: 127.0.0.1:28080") {
+		t.Fatalf("status output = %q, want ssh tunnel remote", out)
 	}
 }
 
@@ -255,6 +284,7 @@ func TestRunSetupConfiguresUpstreamAndCreatesToken(t *testing.T) {
 		"https://api.example.test/v1/",
 		keyValue,
 		"local",
+		"none",
 	}, "\n") + "\n"
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -290,6 +320,126 @@ func TestRunSetupConfiguresUpstreamAndCreatesToken(t *testing.T) {
 	}
 	if !strings.Contains(out, "relay token: llmr_") {
 		t.Fatalf("setup output = %q, want relay token", out)
+	}
+}
+
+func TestRunSetupInstallsCloudflaredOnMacOS(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
+	runner := &fakeExternalRunner{}
+	setSetupExternalTestRunner(t, runner, "darwin")
+	keyValue := strings.Join([]string{"setup", "secret", "value"}, "-")
+	tunnelToken := strings.Join([]string{"cloudflare", "secret", "token"}, "-")
+	input := strings.Join([]string{
+		"https://api.example.test/v1/",
+		keyValue,
+		"local",
+		"",
+		tunnelToken,
+	}, "\n") + "\n"
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := RunWithIO([]string{"setup"}, strings.NewReader(input), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(setup) returned error: %v", err)
+	}
+
+	wantCalls := []string{
+		"brew install cloudflared",
+		"sudo cloudflared service install " + tunnelToken,
+		"sudo launchctl start com.cloudflare.cloudflared",
+	}
+	if strings.Join(runner.calls, "\n") != strings.Join(wantCalls, "\n") {
+		t.Fatalf("runner calls = %#v, want %#v", runner.calls, wantCalls)
+	}
+	combined := stdout.String() + stderr.String()
+	if strings.Contains(combined, keyValue) {
+		t.Fatalf("setup leaked upstream key: %q", combined)
+	}
+	if strings.Contains(combined, tunnelToken) {
+		t.Fatalf("setup leaked Cloudflare tunnel token: %q", combined)
+	}
+	configData, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(configData), `enabled = false`) {
+		t.Fatalf("config = %q, want ssh tunnel disabled for Cloudflare flow", string(configData))
+	}
+}
+
+func TestRunSetupRejectsCloudflaredAutoInstallOutsideMacOS(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
+	runner := &fakeExternalRunner{}
+	setSetupExternalTestRunner(t, runner, "linux")
+	input := strings.Join([]string{
+		"https://api.example.test/v1/",
+		"secret",
+		"local",
+		"cloudflare",
+		"cloudflare-secret-token",
+	}, "\n") + "\n"
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := RunWithIO([]string{"setup"}, strings.NewReader(input), &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(setup) returned nil error, want non-macOS cloudflared error")
+	}
+	if !strings.Contains(err.Error(), "cloudflared service auto-install is only supported on macOS") {
+		t.Fatalf("error = %q, want macOS support error", err.Error())
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want none", runner.calls)
+	}
+}
+
+func TestRunSetupConfiguresSSHTunnelOnlyWhenSelected(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
+	runner := &fakeExternalRunner{}
+	setSetupExternalTestRunner(t, runner, "darwin")
+	input := strings.Join([]string{
+		"https://api.example.test/v1/",
+		"secret",
+		"local",
+		"ssh",
+		"relay-server",
+		"ubuntu",
+		"2222",
+		"127.0.0.1",
+		"28080",
+	}, "\n") + "\n"
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := RunWithIO([]string{"setup"}, strings.NewReader(input), &stdout, &stderr); err != nil {
+		t.Fatalf("Run(setup) returned error: %v", err)
+	}
+
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want no cloudflared commands", runner.calls)
+	}
+	configData, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	configText := string(configData)
+	for _, want := range []string{
+		`enabled = true`,
+		`ssh_host = "relay-server"`,
+		`ssh_user = "ubuntu"`,
+		`ssh_port = "2222"`,
+		`remote_host = "127.0.0.1"`,
+		`remote_port = "28080"`,
+	} {
+		if !strings.Contains(configText, want) {
+			t.Fatalf("config = %q, want %q", configText, want)
+		}
 	}
 }
 
@@ -627,6 +777,237 @@ func TestRunConfigTestUsesKeyWithoutPrintingIt(t *testing.T) {
 	}
 }
 
+func TestRunConfigTestHintsModelsPathOnNotFound(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	setInstallTestHome(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	for _, args := range [][]string{
+		{"install"},
+		{"config", "set-url", server.URL + "/v1"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := Run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) returned error: %v", args, err)
+		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run([]string{"config", "test", "--path", "/v1/models"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(config test) returned error: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "status: 404") {
+		t.Fatalf("config test output = %q, want 404 status", out)
+	}
+	if !strings.Contains(out, "try --path /models") {
+		t.Fatalf("config test output = %q, want /models hint", out)
+	}
+}
+
+func TestRunRelayTestUsesLocalConfigAndToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	tokenValue := "llmr_test_local_token"
+	var seenAuth string
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	configText := fmt.Sprintf(`listen_addr = "%s"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+api_key_source = "inline"
+api_key_env = ""
+api_key = "redacted"
+
+[tunnel]
+enabled = false
+ssh_host = ""
+ssh_user = ""
+ssh_port = "22"
+remote_host = "127.0.0.1"
+remote_port = "18080"
+`, listener.Addr().String())
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	tokenJSON := fmt.Sprintf(`[{"key_id":"local","token":"%s","enabled":true}]`, tokenValue)
+	if err := os.WriteFile(filepath.Join(home, "tokens.json"), []byte(tokenJSON), 0o600); err != nil {
+		t.Fatalf("write tokens: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run([]string{"test"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(test) returned error: %v", err)
+	}
+
+	if seenAuth != "Bearer "+tokenValue {
+		t.Fatalf("Authorization = %q, want relay token", seenAuth)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"relay: ok",
+		"status: 200",
+		"key-id: local",
+		"OpenAI-compatible base_url:",
+		"Anthropic-compatible base_url:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("test output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, tokenValue) {
+		t.Fatalf("test output leaked relay token: %q", out)
+	}
+}
+
+func TestRunRelayTestURLOverridePrintsClientBaseURLs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	tokenValue := "llmr_test_public_token"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+tokenValue {
+			t.Fatalf("Authorization = %q, want relay token", r.Header.Get("Authorization"))
+		}
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	configText := `listen_addr = "0.0.0.0:18080"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+api_key_source = "inline"
+api_key_env = ""
+api_key = "redacted"
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	tokenJSON := fmt.Sprintf(`[{"key_id":"public","token":"%s","enabled":true}]`, tokenValue)
+	if err := os.WriteFile(filepath.Join(home, "tokens.json"), []byte(tokenJSON), 0o600); err != nil {
+		t.Fatalf("write tokens: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run([]string{"test", "--url", server.URL}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(test --url) returned error: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, server.URL+"/v1/models") {
+		t.Fatalf("test output = %q, want tested URL", out)
+	}
+	if !strings.Contains(out, server.URL+"/v1") {
+		t.Fatalf("test output = %q, want OpenAI base URL", out)
+	}
+	if strings.Contains(out, tokenValue) {
+		t.Fatalf("test output leaked relay token: %q", out)
+	}
+}
+
+func TestRunRelayTestReportsMissingToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	configText := `listen_addr = "127.0.0.1:18080"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+api_key_source = "inline"
+api_key_env = ""
+api_key = "redacted"
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "tokens.json"), []byte(`[]`), 0o600); err != nil {
+		t.Fatalf("write tokens: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := Run([]string{"test"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(test) returned nil error, want missing token error")
+	}
+	if !strings.Contains(err.Error(), "no enabled relay token found") {
+		t.Fatalf("error = %q, want missing token", err.Error())
+	}
+}
+
+func TestRunRelayTestReportsConnectionRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	configText := fmt.Sprintf(`listen_addr = "%s"
+
+[upstream]
+base_url = "https://api.example.test/v1"
+api_key_source = "inline"
+api_key_env = ""
+api_key = "redacted"
+`, addr)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "tokens.json"), []byte(`[{"key_id":"local","token":"llmr_token","enabled":true}]`), 0o600); err != nil {
+		t.Fatalf("write tokens: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err = Run([]string{"test"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("Run(test) returned nil error, want connection error")
+	}
+	if !strings.Contains(err.Error(), "run llmrelay start") {
+		t.Fatalf("error = %q, want start hint", err.Error())
+	}
+}
+
 func TestRunUpstreamIsRemoved(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -818,7 +1199,7 @@ func TestRunDoctorReportsConfiguredEnvironment(t *testing.T) {
 		"config.toml: ok",
 		"tokens.json: ok",
 		"config: ok",
-		"tunnel: disabled",
+		"ssh-tunnel: disabled",
 		"upstream key: ok",
 		"tokens: 1 total, 1 disabled",
 	} {

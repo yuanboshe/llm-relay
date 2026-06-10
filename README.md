@@ -2,6 +2,8 @@
 
 `llm-relay` is a Go CLI for running a local LLM API relay. Its command-line binary is `llmrelay`.
 
+Current version: `v0.1.0`.
+
 The current repository contains user-level self-installation, local configuration, relay token management, single-upstream configuration, HTTP request forwarding, optional SSH reverse tunnel support with reconnects, background process commands, and diagnostic commands. It does not yet implement usage tracking, quotas, or rate limits.
 
 ## Documentation
@@ -18,13 +20,14 @@ llmrelay config show
 llmrelay config validate
 llmrelay config set-url https://api.example.test/v1
 llmrelay config set-key --stdin
-llmrelay config test --path /v1/models
+llmrelay config test --path /models
 llmrelay token create local
 llmrelay token list
 llmrelay token inspect local
 llmrelay token verify local --stdin
 llmrelay doctor
 llmrelay serve
+llmrelay test
 llmrelay start
 llmrelay stop
 llmrelay restart
@@ -50,12 +53,12 @@ Run the first-time setup wizard to configure one upstream and create a relay tok
 llmrelay setup
 ```
 
-Or configure it with scriptable commands:
+Or configure it with scriptable commands. If the upstream base URL already includes `/v1`, test `/models`; otherwise test `/v1/models`:
 
 ```sh
 llmrelay config set-url https://api.example.test/v1
 printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay config set-key --stdin
-llmrelay config test --path /v1/models
+llmrelay config test --path /models
 ```
 
 Create additional relay tokens as needed. `tokens.json` stores relay tokens in plaintext, so keep that file private:
@@ -70,12 +73,13 @@ Run the relay in the foreground:
 llmrelay serve
 ```
 
-Run the relay in the background:
+Run the relay in the background and test it without writing curl commands by hand:
 
 ```sh
 llmrelay start
 llmrelay status
 llmrelay logs --tail 50
+llmrelay test
 ```
 
 On macOS, `llmrelay start` uses a user LaunchAgent so the relay starts again when you log in. `llmrelay stop` unloads that LaunchAgent.
@@ -136,9 +140,78 @@ base_url = http://relay-host-lan-ip:18080
 api_key = llmr_xxx
 ```
 
-## Remote Server Entry
+## Cloudflare Tunnel Entry
+
+For remote access without a server or SSH, create a Cloudflare Tunnel and route a public hostname to the relay host:
+
+```text
+Public hostname: llm.example.test
+Service type: HTTP
+Service URL: http://127.0.0.1:18080
+```
+
+The Cloudflare administrator gives the relay host user:
+
+```text
+TUNNEL_TOKEN=<cloudflare-tunnel-token>
+PUBLIC_URL=https://llm.example.test
+```
+
+During `llmrelay setup`, choose the default Cloudflare remote access flow and paste the tunnel token. On macOS, setup installs and starts the `cloudflared` service:
+
+```sh
+brew install cloudflared
+sudo cloudflared service install <TUNNEL_TOKEN>
+sudo launchctl start com.cloudflare.cloudflared
+```
+
+The token is not stored in `config.toml`. Cloudflare Tunnel does not use the `[tunnel]` SSH settings, so keep them disabled:
+
+```toml
+[tunnel]
+enabled = false
+```
+
+Test the public entry from the relay host:
+
+```sh
+llmrelay test --url https://llm.example.test
+```
+
+OpenAI-compatible clients usually use:
+
+```text
+base_url = https://llm.example.test/v1
+api_key = llmr_xxx
+```
+
+Anthropic-compatible clients usually use:
+
+```text
+base_url = https://llm.example.test
+api_key = llmr_xxx
+```
+
+## Advanced SSH Remote Entry
 
 `llmrelay` can also ask OpenSSH to create a reverse tunnel to a remote server. Enable the tunnel in `config.toml`:
+
+Before enabling the tunnel, make sure OpenSSH can log in without an interactive password prompt. This must succeed from the relay host:
+
+```sh
+ssh -o BatchMode=yes ubuntu@relay-server true
+```
+
+If the relay host needs a dedicated key, put that key in `~/.ssh/config` and use the configured host alias as `ssh_host`:
+
+```sshconfig
+Host relay-server
+    HostName ssh.example.test
+    User ubuntu
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+```
 
 ```toml
 [tunnel]
@@ -169,10 +242,10 @@ llm.example.test {
 }
 ```
 
-The remote client can then use:
+OpenAI-compatible remote clients can then use:
 
 ```text
-base_url = https://llm.example.test
+base_url = https://llm.example.test/v1
 api_key = llmr_xxx
 ```
 
@@ -184,6 +257,18 @@ Run the CLI from source:
 
 ```sh
 go run ./cmd/llmrelay version
+```
+
+Build the release binary. The default version is `v0.1.0`; `make build` embeds version, commit, and build date:
+
+```sh
+make build
+```
+
+Override the version when needed:
+
+```sh
+make build VERSION=v0.1.0
 ```
 
 Run the local checks:

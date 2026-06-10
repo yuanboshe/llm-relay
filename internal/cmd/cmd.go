@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -25,7 +27,25 @@ import (
 	"github.com/yuanboshe/llm-relay/internal/tunnel"
 )
 
-const version = "dev"
+var (
+	Version   = "v0.1.0"
+	Commit    = ""
+	BuildDate = ""
+)
+
+type externalRunner interface {
+	Run(name string, args ...string) (string, error)
+}
+
+type execExternalRunner struct{}
+
+func (execExternalRunner) Run(name string, args ...string) (string, error) {
+	out, err := exec.Command(name, args...).CombinedOutput()
+	return string(out), err
+}
+
+var setupExternalRunner externalRunner = execExternalRunner{}
+var setupGOOS = func() string { return runtime.GOOS }
 
 // Run executes the llmrelay CLI.
 func Run(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -63,6 +83,7 @@ func NewRootCommand(stdin io.Reader) *cobra.Command {
 		newConfigCommand(stdin),
 		newTokenCommand(),
 		newServeCommand(),
+		newRelayTestCommand(),
 		newStartCommand(),
 		newStopCommand(),
 		newRestartCommand(),
@@ -205,7 +226,12 @@ func newUpstreamTestCommand() *cobra.Command {
 			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 				return fmt.Errorf("upstream returned HTTP %d; check upstream API key", resp.StatusCode)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "upstream: %s\npath: %s\nstatus: %d\n", cfg.Upstream.BaseURL, testPath, resp.StatusCode)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "upstream: %s\npath: %s\nstatus: %d\n", cfg.Upstream.BaseURL, testPath, resp.StatusCode); err != nil {
+				return err
+			}
+			if resp.StatusCode == http.StatusNotFound {
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), "hint: upstream returned 404; if base_url already ends with /v1, try --path /models")
+			}
 			return err
 		},
 	}
@@ -661,10 +687,6 @@ func newSetupCommand(stdin io.Reader) *cobra.Command {
 				cfg.Upstream.APIKeyEnv = ""
 				cfg.Upstream.APIKey = apiKey
 			}
-			if err := config.Save(paths.ConfigFile, cfg); err != nil {
-				return err
-			}
-
 			keyID, err := promptLine(cmd.ErrOrStderr(), reader, "relay token key-id [local]: ")
 			if err != nil {
 				return err
@@ -679,21 +701,117 @@ func newSetupCommand(stdin io.Reader) *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if _, _, err := tokenstore.Find(records, keyID); err == nil {
-				_, err = fmt.Fprintf(out, "relay token: kept existing key-id %s\n", keyID)
-				return err
+				if _, err := fmt.Fprintf(out, "relay token: kept existing key-id %s\n", keyID); err != nil {
+					return err
+				}
+			} else {
+				token, err := tokenstore.GenerateToken()
+				if err != nil {
+					return err
+				}
+				records = append(records, tokenstore.NewRecord(keyID, token, time.Now()))
+				if err := store.Save(records); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintf(out, "key-id: %s\nrelay token: %s\n", keyID, token); err != nil {
+					return err
+				}
 			}
-			token, err := tokenstore.GenerateToken()
+
+			remoteAccess, err := promptLine(cmd.ErrOrStderr(), reader, "remote access [cloudflare/none/ssh] (cloudflare): ")
 			if err != nil {
 				return err
 			}
-			records = append(records, tokenstore.NewRecord(keyID, token, time.Now()))
-			if err := store.Save(records); err != nil {
+			if remoteAccess == "" {
+				remoteAccess = "cloudflare"
+			}
+			switch strings.ToLower(remoteAccess) {
+			case "none":
+				cfg.Tunnel.Enabled = false
+			case "cloudflare":
+				cfg.Tunnel.Enabled = false
+			case "ssh":
+				if err := promptSSHTunnelConfig(cmd.ErrOrStderr(), reader, &cfg); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("remote access must be cloudflare, none, or ssh")
+			}
+			if err := config.Save(paths.ConfigFile, cfg); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(out, "key-id: %s\nrelay token: %s\n", keyID, token)
-			return err
+			if strings.ToLower(remoteAccess) == "cloudflare" {
+				token, err := promptLine(cmd.ErrOrStderr(), reader, "Cloudflare tunnel token: ")
+				if err != nil {
+					return err
+				}
+				if token == "" {
+					return fmt.Errorf("Cloudflare tunnel token is required")
+				}
+				return installCloudflaredService(token)
+			}
+			return nil
 		},
 	}
+}
+
+func promptSSHTunnelConfig(out io.Writer, reader *bufio.Reader, cfg *config.Config) error {
+	sshHost, err := promptLine(out, reader, "ssh host: ")
+	if err != nil {
+		return err
+	}
+	sshUser, err := promptLine(out, reader, "ssh user: ")
+	if err != nil {
+		return err
+	}
+	sshPort, err := promptLine(out, reader, "ssh port [22]: ")
+	if err != nil {
+		return err
+	}
+	if sshPort == "" {
+		sshPort = "22"
+	}
+	remoteHost, err := promptLine(out, reader, "remote bind host [127.0.0.1]: ")
+	if err != nil {
+		return err
+	}
+	if remoteHost == "" {
+		remoteHost = "127.0.0.1"
+	}
+	remotePort, err := promptLine(out, reader, "remote bind port [18080]: ")
+	if err != nil {
+		return err
+	}
+	if remotePort == "" {
+		remotePort = "18080"
+	}
+	cfg.Tunnel.Enabled = true
+	cfg.Tunnel.SSHHost = sshHost
+	cfg.Tunnel.SSHUser = sshUser
+	cfg.Tunnel.SSHPort = sshPort
+	cfg.Tunnel.RemoteHost = remoteHost
+	cfg.Tunnel.RemotePort = remotePort
+	return nil
+}
+
+func installCloudflaredService(token string) error {
+	if setupGOOS() != "darwin" {
+		return fmt.Errorf("cloudflared service auto-install is only supported on macOS; install cloudflared manually and run cloudflared service install <TUNNEL_TOKEN>")
+	}
+	commands := []struct {
+		name string
+		args []string
+	}{
+		{name: "brew", args: []string{"install", "cloudflared"}},
+		{name: "sudo", args: []string{"cloudflared", "service", "install", token}},
+		{name: "sudo", args: []string{"launchctl", "start", "com.cloudflare.cloudflared"}},
+	}
+	for _, command := range commands {
+		if _, err := setupExternalRunner.Run(command.name, command.args...); err != nil {
+			return fmt.Errorf("%s failed: %w", command.name, err)
+		}
+	}
+	return nil
 }
 
 func promptLine(out io.Writer, reader *bufio.Reader, prompt string) (string, error) {
@@ -713,10 +831,25 @@ func newVersionCommand() *cobra.Command {
 		Short: "Print version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), version)
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), versionString(Version, Commit, BuildDate))
 			return err
 		},
 	}
+}
+
+func versionString(version string, commit string, buildDate string) string {
+	if commit == "" && buildDate == "" {
+		return version
+	}
+	var lines []string
+	lines = append(lines, version)
+	if commit != "" {
+		lines = append(lines, "commit: "+commit)
+	}
+	if buildDate != "" {
+		lines = append(lines, "date: "+buildDate)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func newConfigCommand(stdin io.Reader) *cobra.Command {
@@ -873,6 +1006,162 @@ func newServeCommand() *cobra.Command {
 	serveCmd.Flags().StringVar(&addr, "addr", "", "override HTTP listen address")
 
 	return serveCmd
+}
+
+func newRelayTestCommand() *cobra.Command {
+	var baseURL string
+	var keyID string
+	var testPath string
+
+	testCmd := &cobra.Command{
+		Use:   "test",
+		Short: "Test the relay endpoint with a local relay token",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, paths, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			store := tokenstore.New(paths.TokenFile)
+			records, err := store.Load()
+			if err != nil {
+				return err
+			}
+			selected, err := selectRelayTestToken(records, keyID)
+			if err != nil {
+				return err
+			}
+			if baseURL == "" {
+				baseURL, err = relayLocalBaseURL(cfg.ListenAddr)
+				if err != nil {
+					return err
+				}
+			}
+			targetURL, err := joinRelayBaseURLPath(baseURL, testPath)
+			if err != nil {
+				return err
+			}
+			req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("Authorization", "Bearer "+selected.Token)
+			client := http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("relay request failed; run llmrelay start and retry: %w", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusUnauthorized {
+				return fmt.Errorf("relay returned HTTP 401; selected relay token was rejected")
+			}
+			if resp.StatusCode == http.StatusForbidden {
+				return fmt.Errorf("relay returned HTTP 403; selected relay token is disabled")
+			}
+			if resp.StatusCode == http.StatusBadGateway {
+				return fmt.Errorf("relay returned HTTP 502; run llmrelay config test --path /models to check upstream")
+			}
+			openAIBase, anthropicBase, err := relayClientBaseURLs(baseURL)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if _, err := fmt.Fprintf(out, "relay: ok\nurl: %s\nstatus: %d\nkey-id: %s\n\n", targetURL, resp.StatusCode, selected.KeyID); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "OpenAI-compatible base_url:\n  %s\n\n", openAIBase); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(out, "Anthropic-compatible base_url:\n  %s\n", anthropicBase)
+			return err
+		},
+	}
+	testCmd.Flags().StringVar(&baseURL, "url", "", "relay base URL to test")
+	testCmd.Flags().StringVar(&keyID, "key-id", "", "relay token key-id to use")
+	testCmd.Flags().StringVar(&testPath, "path", "/v1/models", "relay path to request")
+	return testCmd
+}
+
+func selectRelayTestToken(records []tokenstore.Record, keyID string) (tokenstore.Record, error) {
+	if keyID != "" {
+		_, record, err := tokenstore.Find(records, keyID)
+		if err != nil {
+			return tokenstore.Record{}, err
+		}
+		if !record.Enabled {
+			return tokenstore.Record{}, fmt.Errorf("relay token %s is disabled", keyID)
+		}
+		if record.Token == "" {
+			return tokenstore.Record{}, fmt.Errorf("relay token %s has no plaintext token; rotate or create a relay token", keyID)
+		}
+		return record, nil
+	}
+	for _, record := range records {
+		if record.Enabled && record.Token != "" {
+			return record, nil
+		}
+	}
+	return tokenstore.Record{}, fmt.Errorf("no enabled relay token found; run llmrelay token create local")
+}
+
+func relayLocalBaseURL(listenAddr string) (string, error) {
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:18080"
+	}
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "", fmt.Errorf("invalid listen_addr: %w", err)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port), nil
+}
+
+func joinRelayBaseURLPath(baseURL string, path string) (string, error) {
+	if path == "" {
+		path = "/v1/models"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("path must start with /")
+	}
+	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("relay URL must use http or https and include host")
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if basePath != "" && strings.HasPrefix(path, basePath+"/") {
+		parsed.Path = path
+	} else {
+		parsed.Path = basePath + path
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func relayClientBaseURLs(baseURL string) (string, string, error) {
+	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
+	if err != nil {
+		return "", "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", "", fmt.Errorf("relay URL must use http or https and include host")
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if basePath == "/v1" {
+		openAI := parsed.String()
+		parsed.Path = ""
+		return openAI, parsed.String(), nil
+	}
+	anthropic := parsed.String()
+	parsed.Path = basePath + "/v1"
+	return parsed.String(), anthropic, nil
 }
 
 func newStartCommand() *cobra.Command {
@@ -1065,15 +1354,15 @@ func printServiceStatus(out io.Writer, status service.Status) error {
 
 func printTunnelStatus(out io.Writer, cfg config.Config) error {
 	if cfg.Tunnel.Enabled {
-		if _, err := fmt.Fprintln(out, "tunnel: enabled"); err != nil {
+		if _, err := fmt.Fprintln(out, "ssh-tunnel: enabled"); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(out, "tunnel-remote: %s:%s\n", cfg.Tunnel.RemoteHost, cfg.Tunnel.RemotePort); err != nil {
+		if _, err := fmt.Fprintf(out, "ssh-tunnel-remote: %s:%s\n", cfg.Tunnel.RemoteHost, cfg.Tunnel.RemotePort); err != nil {
 			return err
 		}
 		return nil
 	}
-	_, err := fmt.Fprintln(out, "tunnel: disabled")
+	_, err := fmt.Fprintln(out, "ssh-tunnel: disabled")
 	return err
 }
 
@@ -1156,9 +1445,9 @@ func newDoctorCommand() *cobra.Command {
 				_, _ = fmt.Fprintln(out, "config: ok")
 			}
 			if cfg.Tunnel.Enabled {
-				_, _ = fmt.Fprintln(out, "tunnel: enabled")
+				_, _ = fmt.Fprintln(out, "ssh-tunnel: enabled")
 			} else {
-				_, _ = fmt.Fprintln(out, "tunnel: disabled")
+				_, _ = fmt.Fprintln(out, "ssh-tunnel: disabled")
 			}
 
 			if err == nil {
