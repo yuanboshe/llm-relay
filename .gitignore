@@ -6,6 +6,9 @@
 *.pem
 node_modules/
 dist/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+docs/.vitepress/.temp/
 build/
 target/
 .venv/

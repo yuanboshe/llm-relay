@@ -1,0 +1,10 @@
+:root {
+  --vp-c-brand-1: #2563eb;
+  --vp-c-brand-2: #1d4ed8;
+  --vp-c-brand-3: #60a5fa;
+  --vp-home-hero-name-color: #1f2937;
+}
+
+.VPHero .text {
+  letter-spacing: 0;
+}

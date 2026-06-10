@@ -4,6 +4,10 @@
 
 The current repository contains user-level self-installation, local configuration, relay token management, single-upstream configuration, HTTP request forwarding, optional SSH reverse tunnel support with reconnects, background process commands, and diagnostic commands. It does not yet implement usage tracking, quotas, or rate limits.
 
+## Documentation
+
+User documentation is available at <https://yuanboshe.github.io/llm-relay/>.
+
 ## Current Commands
 
 ```sh
@@ -159,7 +163,7 @@ ssh -N -T -o ExitOnForwardFailure=yes \
 
 On the remote server, a reverse proxy such as Caddy can expose HTTPS:
 
-```caddy
+```text
 llm.example.test {
     reverse_proxy 127.0.0.1:18080
 }
