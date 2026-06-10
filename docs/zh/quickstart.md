@@ -4,11 +4,17 @@
 
 ## 1. 安装
 
-下载的二进制文件可以带平台后缀；安装后命令名固定为 `llmrelay`。
+推荐使用安装脚本安装最新 release。macOS 上，脚本会在第一次运行二进制前清理下载属性并执行本机 ad-hoc 签名，避免系统直接杀掉未处理的下载文件。
 
 ```sh
-chmod +x ./llmrelay-darwin-arm64
-./llmrelay-darwin-arm64 install
+curl -fsSL https://raw.githubusercontent.com/yuanboshe/llm-relay/main/scripts/install.sh | sh
+```
+
+如果已经下载了本地二进制，也使用同一个脚本安装：
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/yuanboshe/llm-relay/main/scripts/install.sh
+sh ./install.sh --local ./llmrelay-darwin-arm64
 ```
 
 安装器会：

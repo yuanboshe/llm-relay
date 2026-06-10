@@ -44,14 +44,20 @@ llmrelay completion bash
 
 ## Minimal Flow
 
-Install a downloaded macOS binary. The downloaded file may include a platform suffix; the installed command is always `llmrelay`:
+Install the latest release with the install script. On macOS, the script clears downloaded-file attributes and applies a local ad-hoc signature before the first binary run:
 
 ```sh
-chmod +x ./llmrelay-darwin-arm64
-./llmrelay-darwin-arm64 install
+curl -fsSL https://raw.githubusercontent.com/yuanboshe/llm-relay/main/scripts/install.sh | sh
 ```
 
-The installer copies the binary to `~/Library/Application Support/llmrelay/bin/llmrelay`, creates a `~/.local/bin/llmrelay` command link, initializes `~/.llmrelay/config.toml` and `~/.llmrelay/tokens.json` if missing, updates `~/.zshrc` for PATH and zsh completion, and preserves existing config and token files.
+To install from a local binary, pass it to the same script:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/yuanboshe/llm-relay/main/scripts/install.sh
+sh ./install.sh --local ./llmrelay-darwin-arm64
+```
+
+The installer copies the binary to `~/Library/Application Support/llmrelay/bin/llmrelay`, creates a `~/.local/bin/llmrelay` command link, initializes `~/.llmrelay/config.toml` and `~/.llmrelay/tokens.json` if missing, updates `~/.zshrc` for PATH and zsh completion, and preserves existing config and token files. Use `llmrelay install --skip-shell-init --skip-completion` when embedding the installer in another setup flow.
 
 Run the setup wizard to configure one upstream and create a relay token. The wizard is safe to run again: existing values are shown first and are kept unless you choose to update them.
 
@@ -299,7 +305,7 @@ dist/llmrelay-darwin-arm64
 dist/SHA256SUMS
 ```
 
-Each file is directly executable after permissions are set. For example, download `llmrelay-darwin-arm64`, run `chmod +x ./llmrelay-darwin-arm64`, then `./llmrelay-darwin-arm64 install`; install copies it to the final `llmrelay` command. Build assets are written to `dist/`, the repository's existing ignored distribution-output directory.
+Release users should prefer `scripts/install.sh`, which downloads the correct asset, verifies `SHA256SUMS`, prepares the binary for macOS when needed, and runs `llmrelay install`. To test a locally built macOS binary without publishing it, run `sh ./scripts/install.sh --local ./dist/llmrelay-darwin-arm64`. Build assets are written to `dist/`, the repository's existing ignored distribution-output directory.
 
 Build a single target when needed:
 

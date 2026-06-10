@@ -415,7 +415,9 @@ func loadTokenRecords() (*tokenstore.Store, []tokenstore.Record, error) {
 }
 
 func newInstallCommand(root *cobra.Command) *cobra.Command {
-	return &cobra.Command{
+	var skipShellInit bool
+	var skipCompletion bool
+	installCmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install llmrelay for the current user",
 		Args:  cobra.NoArgs,
@@ -433,11 +435,13 @@ func newInstallCommand(root *cobra.Command) *cobra.Command {
 				return err
 			}
 			result, err := install.Run(install.Options{
-				SourcePath:    sourcePath,
-				UserHome:      os.Getenv("LLMRELAY_INSTALL_HOME"),
-				ZshrcPath:     os.Getenv("LLMRELAY_ZSHRC"),
-				ConfigPaths:   paths,
-				ZshCompletion: completion.String(),
+				SourcePath:     sourcePath,
+				UserHome:       os.Getenv("LLMRELAY_INSTALL_HOME"),
+				ZshrcPath:      os.Getenv("LLMRELAY_ZSHRC"),
+				ConfigPaths:    paths,
+				ZshCompletion:  completion.String(),
+				SkipShellInit:  skipShellInit,
+				SkipCompletion: skipCompletion,
 			})
 			if err != nil {
 				return err
@@ -463,10 +467,17 @@ func newInstallCommand(root *cobra.Command) *cobra.Command {
 			} else if _, err := fmt.Fprintf(out, "tokens: kept %s\n", paths.TokenFile); err != nil {
 				return err
 			}
+			if skipShellInit {
+				_, err = fmt.Fprintf(out, "zshrc: skipped\n")
+				return err
+			}
 			_, err = fmt.Fprintf(out, "zshrc: updated %s\n", result.ZshrcPath)
 			return err
 		},
 	}
+	installCmd.Flags().BoolVar(&skipShellInit, "skip-shell-init", false, "do not update shell startup files")
+	installCmd.Flags().BoolVar(&skipCompletion, "skip-completion", false, "do not install zsh completion")
+	return installCmd
 }
 
 func newSetupCommand(stdin io.Reader) *cobra.Command {

@@ -280,6 +280,34 @@ func TestRunInstallCreatesConfigInEnvHome(t *testing.T) {
 	}
 }
 
+func TestRunInstallCanSkipShellInitAndCompletion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
+	installHome := setInstallTestHome(t)
+	zshrc := filepath.Join(installHome, ".zshrc")
+	t.Setenv("LLMRELAY_ZSHRC", zshrc)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run([]string{"install", "--skip-shell-init", "--skip-completion"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run(install --skip-shell-init --skip-completion) returned error: %v", err)
+	}
+
+	if _, err := os.Stat(zshrc); !os.IsNotExist(err) {
+		t.Fatalf("zshrc stat error = %v, want not exist", err)
+	}
+	if strings.Contains(stdout.String(), "zshrc: updated") {
+		t.Fatalf("install output = %q, want no zshrc updated message", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "zshrc: skipped") {
+		t.Fatalf("install output = %q, want zshrc skipped message", stdout.String())
+	}
+	completion := filepath.Join(installHome, ".zsh", "completions", "_llmrelay")
+	if _, err := os.Stat(completion); !os.IsNotExist(err) {
+		t.Fatalf("completion stat error = %v, want not exist", err)
+	}
+}
+
 func TestRunInitIsRemoved(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
