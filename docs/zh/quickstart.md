@@ -92,7 +92,7 @@ api_key = llmr_xxx
 llmrelay test remote-client
 ```
 
-测试远程入口时使用 `test <key-id> <url>`，可以读取配置中的 `public_url`，也可以临时传入 URL：
+测试远程入口时使用 `test <key-id> <url>`，把公网入口 URL 作为第二个位置参数传入：
 
 ```sh
 llmrelay test remote-client https://relay.example.test

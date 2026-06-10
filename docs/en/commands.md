@@ -82,7 +82,6 @@ llmrelay config set upstream.api_key
 printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay config set upstream.api_key -
 llmrelay config set upstream.api_key_env OPENAI_API_KEY
 llmrelay config set listen_addr 127.0.0.1:18080
-llmrelay config set public_url https://llm.example.test
 llmrelay config set tunnel.enabled false
 ```
 
@@ -91,6 +90,8 @@ llmrelay config set tunnel.enabled false
 `config set upstream.api_key -` reads the value from stdin, which is useful for scripts.
 
 `config set upstream.api_key_env OPENAI_API_KEY` stores the environment variable name. It does not write the upstream API key to the config file.
+
+`public_url` is no longer a config field. To test a public entry, pass the URL as the second positional argument to `llmrelay test <key-id> <url>`.
 
 `config set` supports dotted TOML paths. Known fields participate in runtime behavior. Unknown fields are preserved in the config file, but `config validate` reports a warning.
 

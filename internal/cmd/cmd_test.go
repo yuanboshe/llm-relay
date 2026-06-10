@@ -627,6 +627,8 @@ api_key = "%s"
 }
 
 func TestRunRemovedCommandsAreUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LLMRELAY_HOME", home)
 	cases := [][]string{
 		{"config", "set-url", "https://api.example.test/v1"},
 		{"config", "set-key", "--stdin"},

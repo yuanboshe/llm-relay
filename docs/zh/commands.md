@@ -82,7 +82,6 @@ llmrelay config set upstream.api_key
 printf '%s\n' "$UPSTREAM_API_KEY" | llmrelay config set upstream.api_key -
 llmrelay config set upstream.api_key_env OPENAI_API_KEY
 llmrelay config set listen_addr 127.0.0.1:18080
-llmrelay config set public_url https://llm.example.test
 llmrelay config set tunnel.enabled false
 ```
 
@@ -91,6 +90,8 @@ llmrelay config set tunnel.enabled false
 `config set upstream.api_key -` 从 stdin 读取值，适合脚本使用。
 
 `config set upstream.api_key_env OPENAI_API_KEY` 保存环境变量名，不把 upstream API key 写入配置文件。
+
+`public_url` 已不再作为配置字段使用。测试公网入口时，把 URL 作为 `llmrelay test <key-id> <url>` 的第二个位置参数传入。
 
 `config set` 支持 dotted TOML path。已知字段会参与运行；未知字段会保留在配置文件中，但 `config validate` 会给出 warning。
 

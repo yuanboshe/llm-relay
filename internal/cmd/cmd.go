@@ -1034,6 +1034,9 @@ func newConfigSetCommand(stdin io.Reader) *cobra.Command {
 			if key == "" || strings.Contains(key, "..") || strings.HasPrefix(key, ".") || strings.HasSuffix(key, ".") {
 				return fmt.Errorf("config key must be a dotted path")
 			}
+			if err := rejectRemovedConfigSetKey(key); err != nil {
+				return err
+			}
 			var rawValue string
 			var err error
 			if len(args) == 2 {
@@ -1073,6 +1076,15 @@ func newConfigSetCommand(stdin io.Reader) *cobra.Command {
 	}
 }
 
+func rejectRemovedConfigSetKey(key string) error {
+	switch key {
+	case "public_url":
+		return fmt.Errorf("public_url is no longer configured; pass the URL to llmrelay test <key-id> <url>")
+	default:
+		return nil
+	}
+}
+
 func setConfigValue(cfg *config.Config, key string, rawValue string) error {
 	if cfg.Extra == nil {
 		cfg.Extra = map[string]any{}
@@ -1081,7 +1093,7 @@ func setConfigValue(cfg *config.Config, key string, rawValue string) error {
 	case "listen_addr":
 		cfg.ListenAddr = rawValue
 	case "public_url":
-		return fmt.Errorf("public_url is no longer configured; pass the URL to llmrelay test <key-id> <url>")
+		return rejectRemovedConfigSetKey(key)
 	case "upstream.base_url":
 		value, err := normalizeBaseURL(rawValue)
 		if err != nil {

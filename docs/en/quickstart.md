@@ -92,7 +92,7 @@ Prefer the built-in test command when validating:
 llmrelay test remote-client
 ```
 
-When testing a remote entry, use `test <key-id> <url>`. The command can read `public_url` from config, or you can pass a temporary URL:
+When testing a remote entry, use `test <key-id> <url>` and pass the public entry URL as the second positional argument:
 
 ```sh
 llmrelay test remote-client https://relay.example.test
