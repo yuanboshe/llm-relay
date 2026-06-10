@@ -14,7 +14,29 @@ To build release binaries from source, run `make build` from the repository root
 make build
 ```
 
-This builds the default release targets and writes them to `dist/` with matching `SHA256SUMS` checksums. Source builds default to version `v0.0.0`; set `VERSION=v0.1.0` (or another release tag) if you want the binary to report an explicit release version.
+This builds the default release targets and writes them to `dist/` with matching `SHA256SUMS` checksums.
+
+Common targets:
+
+```sh
+make build
+make build-local
+make build-linux-amd64
+make build-linux-arm64
+make build-windows-amd64
+make build-darwin-amd64
+make build-darwin-arm64
+make clean
+```
+
+Build metadata is passed as Make variables:
+
+```sh
+make build VERSION=v0.1.0
+make build VERSION=v0.1.0 COMMIT=abc1234 BUILD_DATE=2026-06-11T00:00:00Z
+```
+
+`VERSION` defaults to `v0.0.0`, `COMMIT` defaults to the current short Git commit, and an empty `BUILD_DATE` is replaced with the current UTC time. Use an explicit `VERSION` for release builds.
 
 ## Documentation
 

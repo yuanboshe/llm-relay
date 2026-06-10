@@ -4,6 +4,7 @@ const docsBase = process.env.LLM_RELAY_DOCS_BASE || "/llm-relay/";
 
 const guide = [
   { text: "快速开始", link: "/zh/quickstart" },
+  { text: "源码编译", link: "/zh/build" },
   { text: "部署闭环", link: "/zh/deploy" },
 ];
 
