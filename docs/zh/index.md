@@ -30,3 +30,4 @@
 4. [Token 管理](./tokens.md)
 5. [安全边界](./security.md)
 6. [故障排查](./troubleshooting.md)
+7. [本地文档站](./docs-site.md)

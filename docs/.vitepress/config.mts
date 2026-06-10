@@ -12,6 +12,7 @@ const reference = [
   { text: "Token 管理", link: "/zh/tokens" },
   { text: "安全边界", link: "/zh/security" },
   { text: "故障排查", link: "/zh/troubleshooting" },
+  { text: "本地文档站", link: "/zh/docs-site" },
 ];
 
 export default defineConfig({

@@ -198,6 +198,26 @@ Or run Go tests directly:
 go test ./...
 ```
 
+Run the documentation site locally:
+
+```sh
+npm ci
+npm run docs:dev
+```
+
+Build and preview the static documentation site:
+
+```sh
+npm run docs:build
+npm run docs:preview
+```
+
+The local documentation URL uses the GitHub Pages project base path:
+
+```text
+http://localhost:5173/llm-relay/
+```
+
 ## Planned Direction
 
 Future work is expected to add access logging, usage tracking, quotas, and rate limits.
