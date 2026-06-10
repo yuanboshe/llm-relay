@@ -92,8 +92,8 @@ api_key = llmr_xxx
 llmrelay test local
 ```
 
-其中 `local` 是 relay token 的 `key-id`。测试远程入口时在后面追加 URL：
+测试远程入口时使用 `test public`，可以读取配置中的 `public_url`，也可以临时传入 URL：
 
 ```sh
-llmrelay test remote-client https://relay.example.test
+llmrelay test public https://relay.example.test
 ```

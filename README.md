@@ -9,36 +9,37 @@ The current repository contains user-level self-installation, local configuratio
 ## Documentation
 
 User documentation is available at <https://yuanboshe.github.io/llm-relay/>.
+For the full command manual, see [docs/zh/commands.md](./docs/zh/commands.md).
 
 ## Current Commands
+
+Common commands:
 
 ```sh
 llmrelay install
 llmrelay setup
-llmrelay version
-llmrelay config show
-llmrelay config validate
-llmrelay config set upstream.base_url https://api.example.test/v1
-llmrelay config set upstream.api_key
-llmrelay config set upstream.api_key -
-llmrelay config set upstream.api_key_env OPENAI_API_KEY
-llmrelay config set listen_addr 127.0.0.1:18080
-llmrelay token create local
-llmrelay token list
-llmrelay token show local
-llmrelay doctor
-llmrelay serve
-llmrelay test
-llmrelay test upstream
-llmrelay test local
-llmrelay test remote-client https://llm.example.test
 llmrelay start
 llmrelay stop
 llmrelay restart
 llmrelay status
 llmrelay logs
+llmrelay test
+llmrelay test upstream
+llmrelay test local
+llmrelay test public https://llm.example.test
+llmrelay config show
+llmrelay config validate
+llmrelay config set upstream.base_url https://api.example.test/v1
+llmrelay token create local
+llmrelay token list
+llmrelay token show local
+llmrelay doctor
+llmrelay serve
+llmrelay version
 llmrelay completion bash
 ```
+
+The user-facing command contract is intentionally small: use `setup`, `start`, and `test` for the normal path; use `config set <key> [value]` for scriptable configuration; use `restart` when you explicitly want to restart an already running service.
 
 ## Minimal Flow
 
@@ -95,7 +96,7 @@ llmrelay logs --tail 50
 llmrelay test local
 ```
 
-`llmrelay test <key-id>` tests the local relay with the named relay token. Add a URL to test a remote relay endpoint with the same token.
+`llmrelay test local` tests the local relay with the first enabled plaintext relay token from `tokens.json`. Use `llmrelay test public` to test the configured public URL, or pass a URL for a one-off public endpoint test.
 
 On macOS, `llmrelay start` uses a user LaunchAgent so the relay starts again when you log in. `llmrelay stop` unloads that LaunchAgent.
 If `llmrelay start` is run while the service is already running, it reports `already running` and does not restart the process. Use `llmrelay restart` when you explicitly want to stop and start the service.
@@ -191,7 +192,7 @@ If `cloudflared` is already installed and loaded, `setup` skips reinstalling it 
 Test the public entry from the relay host by passing the relay token key ID and public URL:
 
 ```sh
-llmrelay test remote-client https://llm.example.test
+llmrelay test public https://llm.example.test
 ```
 
 OpenAI-compatible clients usually use:

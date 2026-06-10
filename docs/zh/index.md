@@ -25,9 +25,10 @@
 ## 推荐阅读顺序
 
 1. [快速开始](./quickstart.md)
-2. [部署闭环](./deploy.md)
-3. [配置](./config.md)
-4. [Token 管理](./tokens.md)
-5. [安全边界](./security.md)
-6. [故障排查](./troubleshooting.md)
-7. [本地文档站](./docs-site.md)
+2. [命令手册](./commands.md)
+3. [部署闭环](./deploy.md)
+4. [配置](./config.md)
+5. [Token 管理](./tokens.md)
+6. [安全边界](./security.md)
+7. [故障排查](./troubleshooting.md)
+8. [本地文档站](./docs-site.md)

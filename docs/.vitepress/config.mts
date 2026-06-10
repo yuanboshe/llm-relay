@@ -8,6 +8,7 @@ const guide = [
 ];
 
 const reference = [
+  { text: "命令手册", link: "/zh/commands" },
   { text: "配置", link: "/zh/config" },
   { text: "Token 管理", link: "/zh/tokens" },
   { text: "安全边界", link: "/zh/security" },
